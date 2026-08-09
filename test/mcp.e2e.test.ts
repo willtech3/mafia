@@ -161,6 +161,45 @@ describe('full game over MCP, alternating between two instances', () => {
   });
 });
 
+describe('MCP App wiring', () => {
+  it('serves the app resource and links every tool to it', async () => {
+    const store = new MemoryRoomStore();
+    const { server, url } = await listen(createApp(store));
+    const probe = new MafiaClient(url, 'probe');
+    await probe.connect();
+
+    const resources = await probe.raw().listResources();
+    const appRes = resources.resources.find((r) => r.uri === 'ui://mafia/app.html');
+    expect(appRes).toBeDefined();
+    expect(appRes!.mimeType).toBe('text/html;profile=mcp-app');
+    expect((appRes!._meta as { ui?: { domain?: string } })?.ui?.domain).toMatch(/\.claudemcpcontent\.com$/);
+
+    const read = await probe.raw().readResource({ uri: 'ui://mafia/app.html' });
+    const html = (read.contents[0] as { text: string }).text;
+    expect(html).toContain('<!doctype html>');
+    expect(html).toContain('rolecard');
+    // Self-contained: a strict iframe CSP means external references = broken app.
+    expect(html).not.toMatch(/<(script|link|img)[^>]+(src|href)\s*=\s*["']https?:\/\//i);
+
+    const tools = await probe.raw().listTools();
+    expect(tools.tools).toHaveLength(10);
+    for (const tool of tools.tools) {
+      const meta = tool._meta as Record<string, unknown>;
+      expect((meta['ui'] as { resourceUri?: string })?.resourceUri, tool.name).toBe('ui://mafia/app.html');
+      expect(meta['openai/outputTemplate'], tool.name).toBe('ui://mafia/app.html');
+    }
+
+    // Identified projections carry the caller's seat key for the app.
+    const created = await probe.must('create_room', { name: 'Probe' });
+    expect(created.playerToken).toBeTruthy();
+    const state = await probe.state();
+    expect((state as { player_token?: string }).player_token).toBeTruthy();
+
+    await probe.close();
+    server.close();
+  });
+});
+
 describe('projection payload stays lean over the wire', () => {
   it('an 80-player room projection fits comfortably', async () => {
     const store = new MemoryRoomStore();

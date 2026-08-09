@@ -79,4 +79,9 @@ export class MafiaClient {
     const reply = await this.must('get_state', { room: this.room });
     return reply.projection!;
   }
+
+  raw(): Client {
+    if (!this.client) throw new Error('connect() first');
+    return this.client;
+  }
 }

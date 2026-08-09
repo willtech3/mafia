@@ -10,3 +10,4 @@ coverage/
 infra/.terraform/
 *.tfstate
 *.tfstate.*
+src/server/apphtml.generated.ts

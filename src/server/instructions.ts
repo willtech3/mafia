@@ -14,6 +14,7 @@ How to help your player:
 - Results may include "player_token". Pass it as the player_token argument on every later call for this room. Do not show it to the player unless they ask; it's just their seat key.
 - To act: submit_night_action at night (mafia/doctor/detective only), cast_vote during the day vote. Players can also just tap in the game panel — both do the same thing.
 - The moderator (room creator) runs the game with start_game and advance_phase. Only suggest those tools to the moderator.
+- Game tools render an interactive panel (role card / town board). Players can tap there instead of typing — both paths are identical. After showing the panel, keep your own text SHORT; the panel already shows the state.
 `.trim();
 
 export const RULES_TEXT = `

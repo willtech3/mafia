@@ -1,7 +1,9 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import { registerAppResource, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import { APP_HTML } from './apphtml.generated.js';
 import { GameError } from '../game/errors.js';
 import { initialRoom, sanitizeName } from '../game/reducer.js';
 import type { Phase, RoomState } from '../game/types.js';
@@ -27,7 +29,29 @@ import { RULES_TEXT, SERVER_INSTRUCTIONS } from './instructions.js';
  * players, not developers.
  */
 
-export const SERVER_INFO = { name: 'mafia', version: '0.1.0' } as const;
+export const SERVER_INFO = { name: 'mafia', version: '0.2.0' } as const;
+
+/** The one MCP App resource: role card, town board, victory screen. */
+export const APP_URI = 'ui://mafia/app.html';
+
+/**
+ * Tool→UI association, with the deprecated flat key and ChatGPT's
+ * compatibility alias included so every host era finds it.
+ */
+function uiMeta(): Record<string, unknown> {
+  return {
+    ui: { resourceUri: APP_URI },
+    'ui/resourceUri': APP_URI,
+    'openai/outputTemplate': APP_URI,
+    'openai/widgetAccessible': true,
+  };
+}
+
+/** Claude requires a hash-derived dedicated sandbox origin for app iframes. */
+function claudeUiDomain(): string {
+  const serverUrl = process.env['MAFIA_PUBLIC_URL'] ?? 'https://mafia-staging-1022738355193.us-central1.run.app/mcp';
+  return `${createHash('sha256').update(serverUrl).digest('hex').slice(0, 32)}.claudemcpcontent.com`;
+}
 
 interface ToolCtx {
   store: RoomStore;
@@ -102,7 +126,13 @@ async function loadRoom(ctx: ToolCtx, code: string): Promise<{ state: RoomState;
 /** Fresh full read -> per-viewer projection. The only way results are built. */
 async function project(ctx: ToolCtx, code: string, playerId: string | null, lead?: string): Promise<CallToolResult> {
   const { state, version } = await loadRoom(ctx, code);
-  return resultFor(viewFor(state, playerId, version), lead);
+  const result = resultFor(viewFor(state, playerId, version), lead);
+  // The viewer's own seat key rides along so the app (and a token-less chat)
+  // can act without a separate join. Same trust domain as the projection.
+  if (playerId && state.players[playerId]) {
+    (result.structuredContent as Record<string, unknown>)['player_token'] = mintPlayerToken(code, playerId);
+  }
+  return result;
 }
 
 function identity(ctx: ToolCtx, tokenFromArgs: string | undefined, roomCode: string): PlayerIdentity {
@@ -163,6 +193,26 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
     instructions: SERVER_INSTRUCTIONS,
   });
 
+  registerAppResource(
+    server,
+    'Mafia game board',
+    APP_URI,
+    {
+      mimeType: RESOURCE_MIME_TYPE,
+      description: 'Role card, town board with tap-to-vote, and victory screen for the Mafia party game.',
+      _meta: {
+        ui: {
+          prefersBorder: false,
+          domain: claudeUiDomain(),
+          csp: { connectDomains: [], resourceDomains: [] },
+        },
+      },
+    },
+    async () => ({
+      contents: [{ uri: APP_URI, mimeType: RESOURCE_MIME_TYPE, text: APP_HTML }],
+    }),
+  );
+
   server.registerTool(
     'create_room',
     {
@@ -177,6 +227,7 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
           .describe('Featured rooms are discoverable by join_room without a code. Default true.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      _meta: uiMeta(),
     },
     async ({ name, featured }) => {
       try {
@@ -202,15 +253,12 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
             throw err;
           }
         }
-        const token = mintPlayerToken(code, moderatorId);
-        const result = await project(
+        return await project(
           ctx,
           code,
           moderatorId,
           `Room created! Share the code ${code} out loud so everyone can join.`,
         );
-        (result.structuredContent as Record<string, unknown>)['player_token'] = token;
-        return result;
       } catch (err) {
         return errorResult(err);
       }
@@ -229,6 +277,7 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
         player_token: tokenArg,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: uiMeta(),
     },
     async ({ room, name, player_token }) => {
       try {
@@ -241,12 +290,7 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
           if (name && sanitizeName(name)) {
             await runEvent(store, code, { type: 'JOIN', playerId: existing.playerId, name, seq: 0 });
           }
-          const result = await project(ctx, code, existing.playerId, 'You are already in this room.');
-          (result.structuredContent as Record<string, unknown>)['player_token'] = mintPlayerToken(
-            code,
-            existing.playerId,
-          );
-          return result;
+          return await project(ctx, code, existing.playerId, 'You are already in this room.');
         }
 
         const displayName = sanitizeName(name ?? '');
@@ -263,21 +307,12 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
           (p) => p.name.toLowerCase() === displayName.toLowerCase(),
         );
         if (sameName) {
-          const result = await project(
-            ctx,
-            code,
-            sameName.id,
-            `Welcome back, ${sameName.name} — this seat is yours again.`,
-          );
-          (result.structuredContent as Record<string, unknown>)['player_token'] = mintPlayerToken(code, sameName.id);
-          return result;
+          return await project(ctx, code, sameName.id, `Welcome back, ${sameName.name} — this seat is yours again.`);
         }
 
         const playerId = newPlayerId();
         await runEvent(store, code, { type: 'JOIN', playerId, name: displayName, seq: 0 });
-        const result = await project(ctx, code, playerId, `Welcome to room ${code}, ${displayName}!`);
-        (result.structuredContent as Record<string, unknown>)['player_token'] = mintPlayerToken(code, playerId);
-        return result;
+        return await project(ctx, code, playerId, `Welcome to room ${code}, ${displayName}!`);
       } catch (err) {
         return errorResult(err);
       }
@@ -292,6 +327,7 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
         'Read the current state of the game: phase, living players, vote tallies, narration, and your own private information. Read-only and always safe to call.',
       inputSchema: { room: roomArg, player_token: tokenArg },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: uiMeta(),
     },
     async ({ room, player_token }) => {
       try {
@@ -312,6 +348,7 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
         'The 30-second rules of the game, plus where the caller currently stands if they give a room code. Read-only; call this for anyone new.',
       inputSchema: { room: roomArg.optional(), player_token: tokenArg },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: uiMeta(),
     },
     async ({ room, player_token }) => {
       try {
@@ -347,6 +384,7 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
         'Moderator only: deal secret roles to everyone in the lobby and begin Night 1. Needs 5–80 players.',
       inputSchema: { room: roomArg, player_token: tokenArg },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      _meta: uiMeta(),
     },
     async ({ room, player_token }) => {
       try {
@@ -372,6 +410,7 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
         player_token: tokenArg,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: uiMeta(),
     },
     async ({ room, target_player_id, player_token }) => {
       try {
@@ -401,6 +440,7 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
         player_token: tokenArg,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      _meta: uiMeta(),
     },
     async ({ room, target_player_id, player_token }) => {
       try {
@@ -434,6 +474,7 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
         'Moderator only: close the current phase and move the game forward (night → dawn → discussion → vote → dusk → night...). This resolves pending actions and cannot be undone.',
       inputSchema: { room: roomArg, player_token: tokenArg },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      _meta: uiMeta(),
     },
     async ({ room, player_token }) => {
       try {
@@ -466,6 +507,7 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
         player_token: tokenArg,
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      _meta: uiMeta(),
     },
     async ({ room, player_id, player_token }) => {
       try {
@@ -489,6 +531,7 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
         'Moderator only: end the current game and return everyone (including spectators) to the lobby for a fresh game with new roles.',
       inputSchema: { room: roomArg, player_token: tokenArg },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      _meta: uiMeta(),
     },
     async ({ room, player_token }) => {
       try {
