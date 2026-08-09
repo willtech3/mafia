@@ -222,6 +222,44 @@ Updated through Milestone 1 (2026-08-09).
     (one-time resources/read, cached by hosts) but a hand-rolled bridge
     could cut it ~10x if ever needed.
 
+## M3 decisions (elicitation, OAuth, drills — 2026-08-09)
+
+35. **Elicitation in a stateless multi-replica world.** In the 2025-11-25 era
+    the elicitation answer arrives as a bare JSON-RPC response POST that can
+    land on any replica. Solution shipped: the request is sent with a unique
+    JSON-RPC id via the handler's `sendRequest` (rides the original POST's
+    SSE stream); any replica receiving an unmatched response parks it in the
+    store; the awaiting replica races its own SDK promise against a store
+    poll. Verified by an e2e test that deliberately routes responses to the
+    other instance. Capability detection is impossible per-request in
+    stateless mode (initialize lands elsewhere), so we attempt optimistically
+    and treat rejection/timeout as "unsupported" → teaching error pointing
+    at the app tap path.
+
+36. **Dusk confirmation is elicited only when closing the vote banishes
+    nobody** (tie or zero votes). Confirming every single close would
+    double-prompt app users who already saw the confirm sheet.
+
+37. **Tool schemas are FROZEN at v0.3.0** (optional `target_player_id` +
+    `outputSchema` everywhere). ChatGPT freezes tool scans per connector, so
+    all schema changes were batched into this one revision; UI iteration
+    happens in the `ui://` resource, which hosts fetch fresh.
+
+38. **OAuth ships as the resource-server half**: JWT verification (issuer /
+    JWKS / audience via env) → stable subject → subject-bound seats. The
+    authorization-server half (what ChatGPT's OAuth connector flow needs:
+    AS metadata, client registration against the workspace IdP) is a
+    per-workspace configuration decision that can't be built ahead of
+    knowing the IdP — documented for the enterprise setup. Authless +
+    signed player tokens remain the demo default.
+
+39. **Staging drills, all green against the live service**: 80-seat burst
+    vote (80/80 accepted in 4.1 s, zero lost), 40-seat autopoll soak
+    (zero errors), and a 13-round bot game that ran through a full revision
+    rollout — every instance replaced mid-game — without a single failed
+    call. The `DRILL_TS` env-var trick creates Terraform drift on purpose;
+    the next `terraform apply` heals it.
+
 ## Testing notes
 
 25. Fuzz: 10,000 random full games across n = 5, 6, 7, 12, 40, 80 — all

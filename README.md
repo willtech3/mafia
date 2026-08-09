@@ -5,9 +5,11 @@ each connected through their own ChatGPT or Claude. Stateless on Cloud Run —
 any replica serves any request; killing an instance mid-game is a demo beat,
 not an outage.
 
-**Status: Milestone 1** — core loop, tools, store, tests, fuzz harness,
-staging on Cloud Run. (M2 adds the MCP App UI, M3 elicitation + hardening,
-M4 ship polish. See `DECISIONS.md` for every divergence and judgment call.)
+**Status: feature-complete.** Core loop, MCP App UI (role card, town board,
+victory screen), elicitation with cross-replica answer relay, projector
+board, OAuth identity, staging drills (80-seat burst, soak, kill-instance)
+— all verified against the live deployment and real clients. `DECISIONS.md`
+records every divergence and judgment call; `DEMO_RUNBOOK.md` runs the show.
 
 ## Layout
 
@@ -108,7 +110,23 @@ URL `<server>/mcp`, auth: none. Then in a chat, enable the connector and say
 **Claude (custom connector)** — Settings → Connectors → Add custom connector →
 URL `<server>/mcp`, no auth. Works on claude.ai web and mobile.
 
-## Playing a game (text-only M1 flow)
+## The projector board
+
+`GET /room/{code}/board` — a self-contained big-screen page (SSE, public
+view only): live lobby, narration, vote tally bars, victory splash. This is
+the room's shared anchor; put it on the projector.
+
+## Elicitation (ChatGPT)
+
+`submit_night_action` without a target raises a private picker via MCP
+elicitation (enum of legal targets). Clients without elicitation (Claude
+custom connectors today) get a teaching error pointing at the app's tap
+path — two paths, one validated write. Closing a vote that would banish
+nobody (tie / no votes) asks the moderator accept/decline the same way.
+Answers that land on the wrong replica are relayed through the store —
+elicitation survives multi-instance round-robin (tested).
+
+## Playing a game (text-only flow)
 
 1. Moderator: "create a mafia room" → share the 4-letter code out loud.
 2. Everyone: "join the mafia game as <name>" (no code needed — featured room).
@@ -117,10 +135,42 @@ URL `<server>/mcp`, no auth. Works on claude.ai web and mobile.
 4. Night roles act via `submit_night_action`; day votes via `cast_vote`;
    `get_state` refreshes; every result says what to do next.
 
-## Identity (M1)
+## Identity
 
-- `create_room`/`join_room` mint an HMAC-signed `player_token`; pass it as
-  the `player_token` argument (interactive clients) or as
-  `Authorization: Bearer <token>` (bots, Inspector, load tests).
-- Lost token: `join_room` with the same name reclaims your seat.
-- OAuth/SSO identity lands in M3 and takes precedence over tokens.
+Resolution order per request:
+1. **OAuth subject** — `Authorization: Bearer <JWT>` verified against
+   `MAFIA_OIDC_ISSUER` / `MAFIA_OIDC_JWKS_URL` / `MAFIA_OIDC_AUDIENCE`.
+   Seats bind to the stable subject: reconnects are automatic and names
+   can't be stolen. (This is the resource-server half; the authorization
+   server / connector OAuth flow is configured against the workspace IdP —
+   see DECISIONS.md #35.)
+2. **Player token** — `create_room`/`join_room` mint an HMAC-signed
+   `player_token`; passed as the tool argument (interactive clients) or as
+   `Authorization: Bearer` (bots, Inspector, load tests).
+3. Lost token, no SSO: `join_room` with the same name reclaims the seat
+   (anonymous seats only — subject-bound seats never reclaim by name).
+
+## Reliability drills (run them against the real deployment)
+
+```bash
+npx tsx src/bots/drill.ts --url <server>/mcp burst          # 80 votes ≤5s, zero lost
+npx tsx src/bots/drill.ts --url <server>/mcp soak           # 60s autopoll churn, zero errors
+npx tsx src/bots/drill.ts --url <server>/mcp killgame       # full game across a revision roll
+# mid-killgame, replace every instance:
+gcloud run services update mafia-staging --region us-central1 --update-env-vars DRILL_TS=$(date +%s)
+```
+
+## Publish
+
+**ChatGPT (Enterprise workspace)** — keep the connector in developer-mode
+drafts while iterating (published apps freeze a tool snapshot only admins
+refresh). To publish: workspace admin → Settings → Apps → create from the
+`/mcp` URL → Scan tools → Create → Publish, then "Configure Access" to the
+audience group. Tool schemas are frozen as of v0.3.0 precisely so this scan
+never needs a refresh mid-conference.
+
+**Claude (custom connector)** — Settings → Connectors → Add custom
+connector → `<server>/mcp`, no auth. Works on web, Desktop, iOS/Android
+(apps render on mobile). The board resource carries the Claude sandbox
+`ui.domain` derived from `MAFIA_PUBLIC_URL` — set that env var (Terraform)
+if the service URL ever changes.
