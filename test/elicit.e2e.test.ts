@@ -124,8 +124,9 @@ describe('night-action elicitation', () => {
   it('teaches the tap fallback when the client cannot elicit', async () => {
     const { code, mafia } = await nightRoom({}); // no elicitation capability
     const reply = await mafia.call('submit_night_action', { room: code });
-    expect(reply.isError).toBe(true);
-    expect(reply.text).toContain('tap your target');
+    expect(reply.isError).toBe(false); // live board rides along for tapping
+    expect(reply.text).toContain('Tap your target');
+    expect(reply.projection!.you!.nightTarget).toBeUndefined();
   }, 30_000);
 
   it('still validates explicit targets exactly as before', async () => {

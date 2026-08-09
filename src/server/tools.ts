@@ -538,9 +538,13 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
             return await project(ctx, code, id.playerId, 'No action recorded — the night is still young.');
           }
           if (outcome.kind === 'unavailable') {
-            fail(
-              'WRONG_PHASE',
-              'I couldn’t show you a private picker here. Open the game panel and tap your target instead — or tell me the name and I’ll pass it along.',
+            // Not an error: hand back the live board so the player can tap
+            // their target there (and the panel renders instead of a blank).
+            return await project(
+              ctx,
+              code,
+              id.playerId,
+              'This chat can’t show the private picker, so nothing was chosen for you. Tap your target on the game panel below — or tell me a name and I’ll pass it along.',
             );
           }
           const chosen = String(outcome.content['target'] ?? '');
