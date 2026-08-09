@@ -192,6 +192,36 @@ Updated through Milestone 1 (2026-08-09).
     (rejoin with the exact original name), but M2's app should display "You
     are: <name>" prominently so players always know their seat name.
 
+## M2 findings (app live in real ChatGPT, 2026-08-09)
+
+31. **The full M2 loop was verified in production ChatGPT web**, driven both
+    by automation and by Will playing an entire 7-seat game to a Town win
+    through the app alone: lobby → in-app Start → card-flip role reveal →
+    night board → in-app dawn → death/role reveal → discussion → tap-to-vote
+    with confirm sheet → dusk → victory screen with full unmasking. Widget-
+    initiated tool calls (start_game, advance_phase, cast_vote) execute
+    through the bridge without chat round-trips.
+
+32. **ChatGPT dev-mode tool scans are frozen per connector instance** —
+    after adding `_meta.ui` the app did not render until the connector was
+    recreated (disconnect deletes it; the old name stays reserved, hence the
+    staging connector is called "Mafia Game"). Expect a scan refresh (or
+    admin refresh once workspace-published) after every tool-metadata change.
+
+33. **Hints must address the human, not the model.** Moderator hints
+    originally read "Use advance_phase to bring the dawn" — imperative
+    tool-call phrasing that a model eager to help will happily execute (the
+    first live test already showed the model self-driving create_room after
+    a failed blind join). All moderator hints now speak to the person ("you
+    can bring the dawn from the app"), and server instructions add a hard
+    rule: pacing tools only on explicit human request, never chained.
+
+34. Cosmetics fixed from live testing: lobby header showed "❤️ 0" (alive
+    counts only exist once roles are dealt) — lobby now shows "🏮 N".
+    The app resource weighs ~330 KB (bundled ext-apps SDK); acceptable
+    (one-time resources/read, cached by hosts) but a hand-rolled bridge
+    could cut it ~10x if ever needed.
+
 ## Testing notes
 
 25. Fuzz: 10,000 random full games across n = 5, 6, 7, 12, 40, 80 — all

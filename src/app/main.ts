@@ -365,7 +365,7 @@ function renderTop(p: Projection): void {
   bar.append(
     h('span', { class: `pill phase${meta.day ? ' day' : ''}` }, `${meta.icon} `, h('strong', {}, meta.label(p.round))),
     h('span', { class: 'pill code', title: 'Room code' }, p.room),
-    h('span', { class: 'pill' }, `❤️ ${p.aliveCount}${p.phase === 'LOBBY' ? '' : `/${p.seatedCount}`}`),
+    h('span', { class: 'pill' }, p.phase === 'LOBBY' ? `🏮 ${p.lobbyCount}` : `❤️ ${p.aliveCount}/${p.seatedCount}`),
     h('span', { class: 'spacer' }),
   );
 

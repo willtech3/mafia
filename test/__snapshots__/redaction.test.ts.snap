@@ -85,7 +85,7 @@ exports[`snapshot: one projection per role at night (fixed seed) > matches the r
       "text": "A cold wind snuffs the last candle in TEST. The first night falls.",
     },
   ],
-  "next_step_hint": "It’s night — open the app and choose someone to protect (you may protect yourself). (Moderator: 1/3 night actions in — advance_phase when ready.)",
+  "next_step_hint": "It’s night — open the app and choose someone to protect (you may protect yourself). (Moderator: 1/3 night actions in — you close the night when ready.)",
   "phase": "NIGHT",
   "players": [
     {

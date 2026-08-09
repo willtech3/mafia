@@ -303,7 +303,7 @@ function nextStepHint(state: RoomState, viewer: Player | null): string {
     case 'LOBBY': {
       const count = Object.values(state.players).filter((p) => !p.spectator).length;
       return mod
-        ? `${count} in the lobby. When everyone has joined (5–80), use start_game.`
+        ? `${count} in the lobby. When everyone has joined (5–80), you can start the game from the app (or say "start the game").`
         : 'You are in the lobby — wait for the moderator to start the game.';
     }
     case 'NIGHT': {
@@ -311,7 +311,7 @@ function nextStepHint(state: RoomState, viewer: Player | null): string {
       const nightRoles = alivePlayers(state).filter((p) => p.role !== 'VILLAGER');
       const acted = nightRoles.filter((p) => state.actions[p.id]).length;
       if (mod && viewer.role === 'VILLAGER') {
-        return `Night ${state.round}: ${acted} of ${nightRoles.length} night actions are in. Use advance_phase to bring the dawn.`;
+        return `Night ${state.round}: ${acted} of ${nightRoles.length} night actions are in. When you're ready, bring the dawn from the app (or say so).`;
       }
       const yourAction = state.actions[viewer.id];
       switch (viewer.role) {
@@ -334,12 +334,12 @@ function nextStepHint(state: RoomState, viewer: Player | null): string {
     case 'DAWN':
       if (dead) return deadHint(mod);
       return mod
-        ? 'Dawn has broken — read the narration aloud, then advance_phase to open discussion.'
+        ? 'Dawn has broken — read the narration aloud. When the room is ready, you can open discussion.'
         : 'Dawn has broken — check the narration to see what happened, then discuss out loud.';
     case 'DAY_DISCUSSION':
       if (dead) return deadHint(mod);
       return mod
-        ? 'Discussion is open — when the room is ready, advance_phase to open voting.'
+        ? 'Discussion is open — let people argue out loud. When the room is ready, you can open voting.'
         : 'Discuss out loud: who seems suspicious? The moderator will open voting soon.';
     case 'DAY_VOTE': {
       if (dead) return deadHint(mod);
@@ -347,12 +347,12 @@ function nextStepHint(state: RoomState, viewer: Player | null): string {
       const base = yourVote
         ? 'Your vote is in — you can change it until the moderator closes voting.'
         : 'Voting is open — tap a player in the app to vote (or vote to abstain).';
-      return mod ? `${base} Use advance_phase to close the vote.` : base;
+      return mod ? `${base} As moderator, you close the vote when the room is done.` : base;
     }
     case 'DUSK':
       if (dead) return deadHint(mod);
       return mod
-        ? 'The votes are counted — read the narration aloud, then advance_phase to continue.'
+        ? 'The votes are counted — read the narration aloud. When ready, you can continue to night.'
         : 'The votes are counted — see the narration for who was banished. Night falls soon.';
     case 'ENDED':
       return mod
@@ -368,5 +368,5 @@ function deadHint(mod: boolean): string {
 }
 
 function modSuffix(mod: boolean, acted: number, total: number): string {
-  return mod ? ` (Moderator: ${acted}/${total} night actions in — advance_phase when ready.)` : '';
+  return mod ? ` (Moderator: ${acted}/${total} night actions in — you close the night when ready.)` : '';
 }
