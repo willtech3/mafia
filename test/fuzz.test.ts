@@ -238,7 +238,7 @@ describe(`fuzz: ${GAMES} random full games across sizes ${SIZES.join(', ')}`, ()
   let seed = 0;
 
   for (let b = 1; b <= BATCHES; b++) {
-    it(`batch ${b}/${BATCHES} holds every invariant`, { timeout: 300_000 }, () => {
+    it(`batch ${b}/${BATCHES} holds every invariant`, { timeout: 300_000 }, async () => {
       for (let g = 0; g < perBatch && seed < GAMES; g++) {
         seed++;
         try {
@@ -246,6 +246,9 @@ describe(`fuzz: ${GAMES} random full games across sizes ${SIZES.join(', ')}`, ()
         } catch (err) {
           throw new Error(`fuzz game seed=${seed} failed: ${(err as Error).message}`, { cause: err });
         }
+        // Yield so the worker's RPC heartbeat isn't starved by this
+        // CPU-bound loop (kills CI runs otherwise).
+        if (seed % 50 === 0) await new Promise((r) => setImmediate(r));
       }
     });
   }
