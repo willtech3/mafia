@@ -156,13 +156,28 @@ async function loadRoom(ctx: ToolCtx, code: string): Promise<{ state: RoomState;
 }
 
 /** Fresh full read -> per-viewer projection. The only way results are built. */
-async function project(ctx: ToolCtx, code: string, playerId: string | null, lead?: string): Promise<CallToolResult> {
+async function project(
+  ctx: ToolCtx,
+  code: string,
+  playerId: string | null,
+  lead?: string,
+  opts: { includeSeatKey?: boolean } = {},
+): Promise<CallToolResult> {
   const { state, version } = await loadRoom(ctx, code);
   const result = resultFor(viewFor(state, playerId, version), lead);
   // The viewer's own seat key rides along so the app (and a token-less chat)
   // can act without a separate join. Same trust domain as the projection.
   if (playerId && state.players[playerId]) {
-    (result.structuredContent as Record<string, unknown>)['player_token'] = mintPlayerToken(code, playerId);
+    const token = mintPlayerToken(code, playerId);
+    (result.structuredContent as Record<string, unknown>)['player_token'] = token;
+    if (opts.includeSeatKey) {
+      // Some hosts (Claude) hide structuredContent from the model, so the
+      // seat key must appear in text once for the model to pass it later.
+      const text = (result.content[0] as { text: string }).text;
+      result.content = [
+        { type: 'text', text: `${text}\n[player_token: ${token} — pass this on every later call for this room]` },
+      ];
+    }
   }
   return result;
 }
@@ -316,6 +331,7 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
           code,
           moderatorId,
           `Room created! Share the code ${code} out loud so everyone can join.`,
+          { includeSeatKey: true },
         );
       } catch (err) {
         return errorResult(err);
@@ -350,7 +366,7 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
             if (name && sanitizeName(name) && sanitizeName(name) !== seat.name) {
               await runEvent(store, code, { type: 'JOIN', playerId: seat.id, name, seq: 0, subject: ctx.oidc.subject });
             }
-            return await project(ctx, code, seat.id, `Welcome back, ${seat.name} — this seat is yours.`);
+            return await project(ctx, code, seat.id, `Welcome back, ${seat.name} — this seat is yours.`, { includeSeatKey: true });
           }
         }
 
@@ -360,7 +376,7 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
           if (name && sanitizeName(name)) {
             await runEvent(store, code, { type: 'JOIN', playerId: existing.playerId, name, seq: 0 });
           }
-          return await project(ctx, code, existing.playerId, 'You are already in this room.');
+          return await project(ctx, code, existing.playerId, 'You are already in this room.', { includeSeatKey: true });
         }
 
         const displayName = sanitizeName(name ?? ctx.oidc?.name ?? '');
@@ -381,7 +397,7 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
           if (sameName.subject && sameName.subject !== ctx.oidc?.subject) {
             fail('BAD_TARGET', `The name "${displayName}" is taken in this room — pick a different one.`);
           }
-          return await project(ctx, code, sameName.id, `Welcome back, ${sameName.name} — this seat is yours again.`);
+          return await project(ctx, code, sameName.id, `Welcome back, ${sameName.name} — this seat is yours again.`, { includeSeatKey: true });
         }
 
         const playerId = newPlayerId();
@@ -392,7 +408,7 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
           seq: 0,
           ...(ctx.oidc ? { subject: ctx.oidc.subject } : {}),
         });
-        return await project(ctx, code, playerId, `Welcome to room ${code}, ${displayName}!`);
+        return await project(ctx, code, playerId, `Welcome to room ${code}, ${displayName}!`, { includeSeatKey: true });
       } catch (err) {
         return errorResult(err);
       }
