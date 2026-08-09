@@ -223,22 +223,34 @@ function runOneGame(gameSeed: number, stats: FuzzStats): void {
 }
 
 describe(`fuzz: ${GAMES} random full games across sizes ${SIZES.join(', ')}`, () => {
-  it('holds every invariant in every game', { timeout: 600_000 }, () => {
-    const stats: FuzzStats = {
-      games: 0,
-      bySize: new Map(),
-      winners: new Map(),
-      totalRounds: 0,
-      invalidAttempts: 0,
-      kicks: 0,
-    };
-    for (let g = 0; g < GAMES; g++) {
-      try {
-        runOneGame(g + 1, stats);
-      } catch (err) {
-        throw new Error(`fuzz game seed=${g + 1} failed: ${(err as Error).message}`, { cause: err });
+  // Batched so no single test runs for minutes — long tests starve the
+  // vitest worker heartbeat on slow CI runners.
+  const BATCHES = Math.min(10, GAMES);
+  const perBatch = Math.ceil(GAMES / BATCHES);
+  const stats: FuzzStats = {
+    games: 0,
+    bySize: new Map(),
+    winners: new Map(),
+    totalRounds: 0,
+    invalidAttempts: 0,
+    kicks: 0,
+  };
+  let seed = 0;
+
+  for (let b = 1; b <= BATCHES; b++) {
+    it(`batch ${b}/${BATCHES} holds every invariant`, { timeout: 300_000 }, () => {
+      for (let g = 0; g < perBatch && seed < GAMES; g++) {
+        seed++;
+        try {
+          runOneGame(seed, stats);
+        } catch (err) {
+          throw new Error(`fuzz game seed=${seed} failed: ${(err as Error).message}`, { cause: err });
+        }
       }
-    }
+    });
+  }
+
+  it('aggregate coverage is sound', () => {
     expect(stats.games).toBe(GAMES);
     for (const size of SIZES) {
       expect(stats.bySize.get(size) ?? 0, `size ${size} never fuzzed`).toBeGreaterThan(0);
