@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+
+      - name: Start Firestore emulator
+        run: |
+          docker run -d --name firestore-emulator -p 8899:8899 \
+            gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+            gcloud emulators firestore start --host-port=0.0.0.0:8899
+          for i in $(seq 1 60); do
+            curl -s http://localhost:8899 >/dev/null && break
+            sleep 1
+          done
+
+      - name: Tests (unit, redaction, e2e, stores, 2k-game fuzz)
+        run: npm test
+        env:
+          FIRESTORE_EMULATOR_HOST: localhost:8899
+
+  fuzz-full:
+    # The full 10,000-game invariant sweep; slower, so it only gates main.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run fuzz

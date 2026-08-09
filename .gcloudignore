@@ -1,0 +1,10 @@
+node_modules
+dist
+test
+*.log
+.git
+.env*
+DECISIONS.md
+README.md
+DEMO_RUNBOOK.md
+.gcloudignore

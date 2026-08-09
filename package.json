@@ -1,0 +1,33 @@
+{
+  "name": "mafia-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mafia (Werewolf) as a stateless remote MCP server with an embedded MCP App UI",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server/main.ts",
+    "start": "node dist/server/main.js",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "fuzz": "FUZZ_GAMES=10000 vitest run test/fuzz.test.ts",
+    "emulator": "docker run --rm -p 8899:8899 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators gcloud emulators firestore start --host-port=0.0.0.0:8899"
+  },
+  "dependencies": {
+    "@google-cloud/firestore": "^7.11.0",
+    "@hono/node-server": "^1.14.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "hono": "^4.13.1",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.1.0"
+  }
+}

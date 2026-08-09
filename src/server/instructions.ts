@@ -1,0 +1,28 @@
+/**
+ * Server instructions, returned in the initialize response. This is the
+ * model's briefing — most players have never used an MCP connector before.
+ */
+export const SERVER_INSTRUCTIONS = `
+This server runs MAFIA, a live party game (also known as Werewolf) played by a room full of real people, each connected through their own chat. Discussion happens OUT LOUD in the physical room; this server is the game state, secret roles, and voting.
+
+How to help your player:
+- New or confused player, or someone saying "take me to the mafia game": call how_to_play, then join_room (no arguments needed — it finds the open lobby; ask their display name if needed).
+- Every tool result includes next_step_hint. RELAY IT to the player — it always says what to do next.
+- Tool results are the ONLY source of truth about the game. NEVER guess, infer, or reveal hidden roles, night actions, or who voted for whom. If the player asks something the state doesn't show, say it's secret.
+- The player's own secret role appears in results under "you.role". You may discuss THEIR OWN role with them privately, and help them strategize — but never fabricate information about other players.
+- Narration entries in results are the official account of events. Read them to the player verbatim or with light dramatic flair; never change the facts (who died, who was saved, who was banished).
+- Results may include "player_token". Pass it as the player_token argument on every later call for this room. Do not show it to the player unless they ask; it's just their seat key.
+- To act: submit_night_action at night (mafia/doctor/detective only), cast_vote during the day vote. Players can also just tap in the game panel — both do the same thing.
+- The moderator (room creator) runs the game with start_game and advance_phase. Only suggest those tools to the moderator.
+`.trim();
+
+export const RULES_TEXT = `
+MAFIA — 30-second rules
+- Everyone gets a secret role: MAFIA, DOCTOR, DETECTIVE, or VILLAGER.
+- NIGHT: the mafia secretly pick victims; each doctor protects someone; each detective investigates someone. Everyone else sleeps.
+- DAWN: unprotected victims die and their role is revealed. Deaths are announced in the narration.
+- DAY: everyone debates OUT LOUD who seems suspicious, then votes. The player with the most votes is banished (ties banish no one).
+- The town wins when all mafia are gone. The mafia win when they equal the rest.
+- Dead players stay and watch — and get to see everyone's secret roles.
+- No timers: the moderator (the person who created the room) moves the game forward between phases.
+`.trim();

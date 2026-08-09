@@ -1,0 +1,296 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`snapshot: one projection per role at night (fixed seed) > matches the reviewed shape > detective-night 1`] = `
+{
+  "aliveCount": 7,
+  "detective": {
+    "results": [],
+  },
+  "featured": true,
+  "lobbyCount": 7,
+  "narration": [
+    {
+      "at": "START",
+      "round": 1,
+      "text": "A cold wind snuffs the last candle in TEST. The first night falls.",
+    },
+  ],
+  "next_step_hint": "It’s night — open the app and choose someone to investigate.",
+  "phase": "NIGHT",
+  "players": [
+    {
+      "alive": true,
+      "id": "p0",
+      "isModerator": true,
+      "name": "P00",
+    },
+    {
+      "alive": true,
+      "id": "p1",
+      "name": "P01",
+    },
+    {
+      "alive": true,
+      "id": "p2",
+      "name": "P02",
+    },
+    {
+      "alive": true,
+      "id": "p3",
+      "name": "P03",
+    },
+    {
+      "alive": true,
+      "id": "p4",
+      "name": "P04",
+    },
+    {
+      "alive": true,
+      "id": "p5",
+      "name": "P05",
+    },
+    {
+      "alive": true,
+      "id": "p6",
+      "name": "P06",
+    },
+  ],
+  "room": "TEST",
+  "round": 1,
+  "seatedCount": 7,
+  "spectatorCount": 0,
+  "stateVersion": 42,
+  "winner": null,
+  "you": {
+    "alive": true,
+    "id": "p4",
+    "isModerator": false,
+    "name": "P04",
+    "role": "DETECTIVE",
+    "spectator": false,
+  },
+}
+`;
+
+exports[`snapshot: one projection per role at night (fixed seed) > matches the reviewed shape > doctor-night 1`] = `
+{
+  "aliveCount": 7,
+  "doctor": {},
+  "featured": true,
+  "lobbyCount": 7,
+  "narration": [
+    {
+      "at": "START",
+      "round": 1,
+      "text": "A cold wind snuffs the last candle in TEST. The first night falls.",
+    },
+  ],
+  "next_step_hint": "It’s night — open the app and choose someone to protect (you may protect yourself). (Moderator: 1/3 night actions in — advance_phase when ready.)",
+  "phase": "NIGHT",
+  "players": [
+    {
+      "alive": true,
+      "id": "p0",
+      "isModerator": true,
+      "name": "P00",
+    },
+    {
+      "alive": true,
+      "id": "p1",
+      "name": "P01",
+    },
+    {
+      "alive": true,
+      "id": "p2",
+      "name": "P02",
+    },
+    {
+      "alive": true,
+      "id": "p3",
+      "name": "P03",
+    },
+    {
+      "alive": true,
+      "id": "p4",
+      "name": "P04",
+    },
+    {
+      "alive": true,
+      "id": "p5",
+      "name": "P05",
+    },
+    {
+      "alive": true,
+      "id": "p6",
+      "name": "P06",
+    },
+  ],
+  "room": "TEST",
+  "round": 1,
+  "seatedCount": 7,
+  "spectatorCount": 0,
+  "stateVersion": 42,
+  "winner": null,
+  "you": {
+    "alive": true,
+    "id": "p0",
+    "isModerator": true,
+    "name": "P00",
+    "role": "DOCTOR",
+    "spectator": false,
+  },
+}
+`;
+
+exports[`snapshot: one projection per role at night (fixed seed) > matches the reviewed shape > mafia-night 1`] = `
+{
+  "aliveCount": 7,
+  "featured": true,
+  "lobbyCount": 7,
+  "mafia": {
+    "killsTonight": 1,
+    "tally": [
+      {
+        "count": 1,
+        "targetId": "p1",
+        "targetName": "P01",
+      },
+    ],
+    "teammates": [],
+  },
+  "narration": [
+    {
+      "at": "START",
+      "round": 1,
+      "text": "A cold wind snuffs the last candle in TEST. The first night falls.",
+    },
+  ],
+  "next_step_hint": "Your target is locked in — you can change it until dawn.",
+  "phase": "NIGHT",
+  "players": [
+    {
+      "alive": true,
+      "id": "p0",
+      "isModerator": true,
+      "name": "P00",
+    },
+    {
+      "alive": true,
+      "id": "p1",
+      "name": "P01",
+    },
+    {
+      "alive": true,
+      "id": "p2",
+      "name": "P02",
+    },
+    {
+      "alive": true,
+      "id": "p3",
+      "name": "P03",
+    },
+    {
+      "alive": true,
+      "id": "p4",
+      "name": "P04",
+    },
+    {
+      "alive": true,
+      "id": "p5",
+      "name": "P05",
+    },
+    {
+      "alive": true,
+      "id": "p6",
+      "name": "P06",
+    },
+  ],
+  "room": "TEST",
+  "round": 1,
+  "seatedCount": 7,
+  "spectatorCount": 0,
+  "stateVersion": 42,
+  "winner": null,
+  "you": {
+    "alive": true,
+    "id": "p2",
+    "isModerator": false,
+    "name": "P02",
+    "nightTarget": {
+      "id": "p1",
+      "name": "P01",
+    },
+    "role": "MAFIA",
+    "spectator": false,
+  },
+}
+`;
+
+exports[`snapshot: one projection per role at night (fixed seed) > matches the reviewed shape > villager-night 1`] = `
+{
+  "aliveCount": 7,
+  "featured": true,
+  "lobbyCount": 7,
+  "narration": [
+    {
+      "at": "START",
+      "round": 1,
+      "text": "A cold wind snuffs the last candle in TEST. The first night falls.",
+    },
+  ],
+  "next_step_hint": "It’s night — villagers are asleep. Sit tight until dawn.",
+  "phase": "NIGHT",
+  "players": [
+    {
+      "alive": true,
+      "id": "p0",
+      "isModerator": true,
+      "name": "P00",
+    },
+    {
+      "alive": true,
+      "id": "p1",
+      "name": "P01",
+    },
+    {
+      "alive": true,
+      "id": "p2",
+      "name": "P02",
+    },
+    {
+      "alive": true,
+      "id": "p3",
+      "name": "P03",
+    },
+    {
+      "alive": true,
+      "id": "p4",
+      "name": "P04",
+    },
+    {
+      "alive": true,
+      "id": "p5",
+      "name": "P05",
+    },
+    {
+      "alive": true,
+      "id": "p6",
+      "name": "P06",
+    },
+  ],
+  "room": "TEST",
+  "round": 1,
+  "seatedCount": 7,
+  "spectatorCount": 0,
+  "stateVersion": 42,
+  "winner": null,
+  "you": {
+    "alive": true,
+    "id": "p1",
+    "isModerator": false,
+    "name": "P01",
+    "role": "VILLAGER",
+    "spectator": false,
+  },
+}
+`;

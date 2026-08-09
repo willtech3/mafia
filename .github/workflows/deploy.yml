@@ -1,0 +1,59 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency: deploy-staging
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: virtual-library-mcp
+  REGION: us-central1
+  REPO: us-central1-docker.pkg.dev/virtual-library-mcp/mafia
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push image
+        run: |
+          gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+          IMAGE="${REPO}/server:${GITHUB_SHA::12}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform apply
+        working-directory: infra
+        run: |
+          terraform init -input=false
+          terraform apply -auto-approve -input=false -var "image=${IMAGE}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Smoke game against staging
+        run: |
+          npm ci
+          URL=$(cd infra && terraform output -raw service_url)
+          curl -sf "$URL/health"
+          npx tsx src/bots/audience.ts --url "$URL/mcp" --smoke 8
