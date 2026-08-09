@@ -260,6 +260,31 @@ Updated through Milestone 1 (2026-08-09).
     call. The `DRILL_TS` env-var trick creates Terraform drift on purpose;
     the next `terraform apply` heals it.
 
+## Final client verification (2026-08-09)
+
+40. **ChatGPT dev-mode rejects elicitation/create today** (fast client-side
+    error), despite OpenAI docs endorsing elicitation. The fallback is the
+    contract: `submit_night_action` without a target returns the live board
+    with a "tap your target" lead — verified in real ChatGPT, and the model
+    respected "I won't choose for you." Protocol-correct elicitation was
+    separately proven against the production deployment (2 replicas,
+    cross-replica answer relay) with a capable scripted client, so if the
+    enterprise workspace's ChatGPT enables elicitation by conference time,
+    the private picker lights up with zero server changes.
+
+41. **claude.ai custom connector: full pass.** Tools recognized as
+    "Interactive tools" with human titles; blind featured-lobby join worked
+    first try; hints relayed; the MCP App rendered on both join_room and
+    get_state results (same ui:// resource as ChatGPT — one artifact, two
+    hosts); in-app Refresh executed under "Always allow". Claude's
+    per-connector permission default is "Needs approval" — demo players on
+    Claude should Always-allow once, same as ChatGPT.
+
+42. **Connector hygiene:** exactly one active ChatGPT connector remains
+    ("Mafia Game", v0.3.0 frozen schema). Deleted dev connectors keep their
+    names reserved account-side (the original "Mafia" name is burned on this
+    account); the enterprise workspace publish will use the clean name.
+
 ## Testing notes
 
 25. Fuzz: 10,000 random full games across n = 5, 6, 7, 12, 40, 80 — all
