@@ -161,6 +161,37 @@ Updated through Milestone 1 (2026-08-09).
     core/player/action doc model, same merge rules) so the contract suite and
     statelessness tests exercise production semantics without the emulator.
 
+## Real-ChatGPT findings (M1 e2e session, 2026-08-09, ChatGPT Pro web)
+
+27. **The full loop works in real ChatGPT web against staging**: "take me to
+    the mafia game" → blind join_room → teaching error (no lobby) → the model
+    self-corrected to create_room → shared code → start_game with 6 bots →
+    private role reveal → night (bot mafia killed the human!) → advance →
+    dawn narration relayed with dramatic flair but exact facts →
+    dead-moderator flow worked. Write tools executed fine on this Pro
+    account despite docs saying full MCP writes are a Business+/Enterprise
+    beta — treat as rollout variance, still plan on Enterprise for the talk.
+
+28. **ChatGPT labels `player_token` an "Authentication secret"** in the write
+    confirmation card ("Sharing data includes: Authentication secret —
+    player token"). Harmless but scary-sounding; the runbook will tell
+    players to hit "Always allow" once. OAuth (M3) removes tokens and the
+    wording entirely.
+
+29. **Dev-mode connector bindings are conversation-fragile**: clicking
+    "Always allow" mid-call produced a spurious "Resource not found" and the
+    connector then showed as disabled *for that conversation* (server logs:
+    all 200s, nothing wrong server-side). Recovery that provably works: new
+    chat + `join_room` with your exact display name to reclaim the seat.
+    Demo insurance: moderator should set "Always allow" on advance_phase
+    BEFORE the show, in a warm conversation.
+
+30. **The model names players from its own memory** — it created the room as
+    "Will" (from ChatGPT's stored user profile), so a later "rejoin as The
+    Moderator" made a spectator instead of reclaiming. Fine once understood
+    (rejoin with the exact original name), but M2's app should display "You
+    are: <name>" prominently so players always know their seat name.
+
 ## Testing notes
 
 25. Fuzz: 10,000 random full games across n = 5, 6, 7, 12, 40, 80 — all
