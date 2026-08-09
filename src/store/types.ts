@@ -73,6 +73,15 @@ export interface RoomStore {
 
   /** Room codes of featured rooms currently in LOBBY (for blind join_room). */
   findFeaturedLobbies(): Promise<string[]>;
+
+  /**
+   * Cross-replica relay for elicitation responses. In the 2025-11-25 era the
+   * client's elicitation answer arrives as a bare JSON-RPC response POST that
+   * may hit a different replica than the one awaiting it; the receiving
+   * replica parks it here and the awaiting one polls (see server/elicit.ts).
+   */
+  putOrphanResponse(id: string, payload: unknown): Promise<void>;
+  takeOrphanResponse(id: string): Promise<unknown | null>;
 }
 
 /** Actions and votes are tagged so stale docs from earlier phases are inert. */

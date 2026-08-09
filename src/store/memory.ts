@@ -127,7 +127,7 @@ export class MemoryRoomStore implements RoomStore {
         for (const id of Object.keys(next.players)) {
           const doc = playerDocFromState(next, id);
           const existing = room.players.get(id);
-          if (!existing || existing.name !== doc.name || existing.spectator !== doc.spectator) {
+          if (!existing || existing.name !== doc.name || existing.spectator !== doc.spectator || existing.subject !== doc.subject) {
             room.players.set(id, structuredClone(doc));
           }
         }
@@ -143,6 +143,16 @@ export class MemoryRoomStore implements RoomStore {
       .filter((r) => r.core.featured && r.core.phase === 'LOBBY')
       .map((r) => r.core.code)
       .sort();
+  }
+
+  private orphans = new Map<string, unknown>();
+
+  async putOrphanResponse(id: string, payload: unknown): Promise<void> {
+    this.orphans.set(id, payload);
+  }
+
+  async takeOrphanResponse(id: string): Promise<unknown | null> {
+    return this.orphans.has(id) ? this.orphans.get(id)! : null;
   }
 
   private nextVersion(): number {

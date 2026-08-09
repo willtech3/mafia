@@ -1,6 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { ElicitRequestSchema, type CallToolResult, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import type { Projection } from '../game/view.js';
 
 /**
@@ -24,11 +24,31 @@ export class MafiaClient {
   constructor(
     private url: string,
     readonly name: string,
+    private opts: {
+      /** Answer elicitation prompts (registers the elicitation capability). */
+      onElicit?: (params: { message: string; requestedSchema: unknown }) => Promise<ElicitResult> | ElicitResult;
+      /** Custom fetch — lets tests route specific POSTs to another instance. */
+      fetch?: typeof fetch;
+      /** Extra headers on every request (e.g. Authorization: Bearer <jwt>). */
+      headers?: Record<string, string>;
+    } = {},
   ) {}
 
   async connect(): Promise<void> {
-    this.client = new Client({ name: `bot-${this.name}`, version: '0.1.0' });
-    const transport = new StreamableHTTPClientTransport(new URL(this.url));
+    this.client = new Client(
+      { name: `bot-${this.name}`, version: '0.1.0' },
+      this.opts.onElicit ? { capabilities: { elicitation: {} } } : {},
+    );
+    if (this.opts.onElicit) {
+      const handler = this.opts.onElicit;
+      this.client.setRequestHandler(ElicitRequestSchema, async (req) =>
+        handler(req.params as { message: string; requestedSchema: unknown }),
+      );
+    }
+    const transport = new StreamableHTTPClientTransport(new URL(this.url), {
+      ...(this.opts.fetch ? { fetch: this.opts.fetch } : {}),
+      ...(this.opts.headers ? { requestInit: { headers: this.opts.headers } } : {}),
+    });
     // Cast: the SDK's Transport type trips exactOptionalPropertyTypes (sessionId).
     await this.client.connect(transport as unknown as Parameters<Client['connect']>[0]);
   }

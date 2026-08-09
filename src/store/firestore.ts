@@ -134,7 +134,7 @@ export class FirestoreRoomStore implements RoomStore {
           for (const id of Object.keys(next.players)) {
             const doc = playerDocFromState(next, id);
             const prev = readPlayerSnaps.get(id)?.data() as PlayerDoc | undefined;
-            if (!prev || prev.name !== doc.name || prev.spectator !== doc.spectator) {
+            if (!prev || prev.name !== doc.name || prev.spectator !== doc.spectator || prev.subject !== doc.subject) {
               t.set(ref.collection('players').doc(id), withMeta(doc));
             }
           }
@@ -153,6 +153,24 @@ export class FirestoreRoomStore implements RoomStore {
       .limit(10)
       .get();
     return snaps.docs.map((d) => d.id).sort();
+  }
+
+  async putOrphanResponse(id: string, payload: unknown): Promise<void> {
+    await this.db
+      .collection('elicit')
+      .doc(id)
+      .set({
+        payload: JSON.stringify(payload),
+        updatedAt: FieldValue.serverTimestamp(),
+        expiresAt: Timestamp.fromMillis(Date.now() + 60 * 60 * 1000),
+      });
+  }
+
+  async takeOrphanResponse(id: string): Promise<unknown | null> {
+    const snap = await this.db.collection('elicit').doc(id).get();
+    if (!snap.exists) return null;
+    const raw = (snap.data() as { payload?: string }).payload;
+    return raw ? (JSON.parse(raw) as unknown) : null;
   }
 }
 

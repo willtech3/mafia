@@ -26,7 +26,7 @@ import {
  */
 
 export type GameEvent =
-  | { type: 'JOIN'; playerId: string; name: string; seq: number }
+  | { type: 'JOIN'; playerId: string; name: string; seq: number; subject?: string }
   | { type: 'START'; byPlayerId: string }
   | { type: 'NIGHT_ACTION'; playerId: string; targetId: string; seq: number }
   | { type: 'VOTE'; playerId: string; targetId: string; seq: number }
@@ -43,6 +43,7 @@ export function initialRoom(args: {
   seed: string;
   nowMs: number;
   featured?: boolean;
+  subject?: string;
 }): RoomState {
   const moderator: Player = {
     id: args.moderatorId,
@@ -52,6 +53,7 @@ export function initialRoom(args: {
     isModerator: true,
     spectator: false,
     joinedSeq: 0,
+    ...(args.subject ? { subject: args.subject } : {}),
   };
   return {
     code: args.code,
@@ -165,7 +167,10 @@ function endGame(state: RoomState, winner: Faction): void {
 // ---------------------------------------------------------------------------
 // events
 
-function applyJoin(state: RoomState, event: { playerId: string; name: string; seq: number }): RoomState {
+function applyJoin(
+  state: RoomState,
+  event: { playerId: string; name: string; seq: number; subject?: string },
+): RoomState {
   const name = sanitizeName(event.name);
   if (name.length === 0) {
     fail('BAD_TARGET', 'That name is empty. Tell me a display name to use, e.g. "join as Sam".');
@@ -174,6 +179,7 @@ function applyJoin(state: RoomState, event: { playerId: string; name: string; se
   const existing = next.players[event.playerId];
   if (existing) {
     existing.name = name; // idempotent re-join / rename
+    if (event.subject) existing.subject = event.subject;
     return next;
   }
   const inLobby = next.phase === 'LOBBY';
@@ -188,6 +194,7 @@ function applyJoin(state: RoomState, event: { playerId: string; name: string; se
     isModerator: false,
     spectator,
     joinedSeq: event.seq,
+    ...(event.subject ? { subject: event.subject } : {}),
   };
   return next;
 }

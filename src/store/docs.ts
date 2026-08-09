@@ -28,6 +28,7 @@ export interface PlayerDoc {
   name: string;
   joinedSeq: number;
   spectator: boolean;
+  subject?: string;
 }
 
 export interface ActionDoc {
@@ -65,7 +66,13 @@ export function coreFromState(state: RoomState): CoreDoc {
 export function playerDocFromState(state: RoomState, playerId: string): PlayerDoc {
   const p = state.players[playerId];
   if (!p) throw new Error(`player ${playerId} not in state`);
-  return { id: p.id, name: p.name, joinedSeq: p.joinedSeq, spectator: p.spectator };
+  return {
+    id: p.id,
+    name: p.name,
+    joinedSeq: p.joinedSeq,
+    spectator: p.spectator,
+    ...(p.subject ? { subject: p.subject } : {}),
+  };
 }
 
 /** The player's current submission as a persistable action doc, if any. */
@@ -96,6 +103,7 @@ export function assembleState(core: CoreDoc, playerDocs: PlayerDoc[], actionDocs
       isModerator: doc.id === core.moderatorId,
       role: seat?.role ?? null,
       alive: seat?.alive ?? true,
+      ...(doc.subject ? { subject: doc.subject } : {}),
     };
   }
 

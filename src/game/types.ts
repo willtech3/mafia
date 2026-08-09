@@ -30,6 +30,8 @@ export interface Player {
   spectator: boolean;
   /** Join order, for stable display sorting. */
   joinedSeq: number;
+  /** Stable SSO subject when OAuth identity is in play. NEVER projected. */
+  subject?: string;
 }
 
 /** A night submission. `kind` is derived from the submitter's role, never from input. */

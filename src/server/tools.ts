@@ -10,6 +10,8 @@ import type { Phase, RoomState } from '../game/types.js';
 import { viewFor, type Projection } from '../game/view.js';
 import { runEvent } from '../store/engine.js';
 import type { RoomStore } from '../store/types.js';
+import { elicitForm, targetEnumSchema, type ElicitCapableExtra } from './elicit.js';
+import type { OidcIdentity } from './oidc.js';
 import {
   mintPlayerToken,
   newPlayerId,
@@ -29,7 +31,7 @@ import { RULES_TEXT, SERVER_INSTRUCTIONS } from './instructions.js';
  * players, not developers.
  */
 
-export const SERVER_INFO = { name: 'mafia', version: '0.2.0' } as const;
+export const SERVER_INFO = { name: 'mafia', version: '0.3.0' } as const;
 
 /** The one MCP App resource: role card, town board, victory screen. */
 export const APP_URI = 'ui://mafia/app.html';
@@ -47,6 +49,34 @@ function uiMeta(): Record<string, unknown> {
   };
 }
 
+/**
+ * Loose but honest output schema shared by all tools (ChatGPT surfaces it and
+ * nags when absent). Every field optional so error-adjacent results and the
+ * bare how_to_play response validate too.
+ */
+const PROJECTION_OUTPUT = {
+  room: z.string().optional(),
+  phase: z.string().optional(),
+  round: z.number().optional(),
+  stateVersion: z.number().optional(),
+  winner: z.string().nullable().optional(),
+  featured: z.boolean().optional(),
+  you: z.record(z.unknown()).nullable().optional(),
+  players: z.array(z.record(z.unknown())).optional(),
+  aliveCount: z.number().optional(),
+  seatedCount: z.number().optional(),
+  lobbyCount: z.number().optional(),
+  spectatorCount: z.number().optional(),
+  narration: z.array(z.record(z.unknown())).optional(),
+  mafia: z.record(z.unknown()).optional(),
+  detective: z.record(z.unknown()).optional(),
+  doctor: z.record(z.unknown()).optional(),
+  vote: z.record(z.unknown()).optional(),
+  reveal: z.record(z.unknown()).optional(),
+  next_step_hint: z.string().optional(),
+  player_token: z.string().optional(),
+};
+
 /** Claude requires a hash-derived dedicated sandbox origin for app iframes. */
 function claudeUiDomain(): string {
   const serverUrl = process.env['MAFIA_PUBLIC_URL'] ?? 'https://mafia-staging-1022738355193.us-central1.run.app/mcp';
@@ -56,6 +86,8 @@ function claudeUiDomain(): string {
 interface ToolCtx {
   store: RoomStore;
   bearer: string | undefined;
+  /** Verified SSO identity, when the request carried a valid JWT. */
+  oidc: OidcIdentity | null;
 }
 
 const roomArg = z
@@ -152,6 +184,30 @@ function identity(ctx: ToolCtx, tokenFromArgs: string | undefined, roomCode: str
   return id;
 }
 
+/** Seat lookup by verified SSO subject; falls back to the token path. */
+async function identityFor(ctx: ToolCtx, tokenFromArgs: string | undefined, code: string): Promise<PlayerIdentity> {
+  if (ctx.oidc) {
+    const { state } = await loadRoom(ctx, code);
+    const seat = Object.values(state.players).find((p) => p.subject === ctx.oidc!.subject);
+    if (seat) return { roomCode: code, playerId: seat.id };
+    if (!resolveIdentity(ctx.bearer, tokenFromArgs)) {
+      fail('NOT_IN_ROOM', `You're signed in but haven't joined room ${code} yet — use join_room first.`);
+    }
+  }
+  return identity(ctx, tokenFromArgs, code);
+}
+
+/** Like identityFor but tolerant: null viewer for read-only tools. */
+async function viewerOrNull(ctx: ToolCtx, tokenFromArgs: string | undefined, code: string): Promise<string | null> {
+  if (ctx.oidc) {
+    const stored = await ctx.store.load(code);
+    const seat = stored ? Object.values(stored.state.players).find((p) => p.subject === ctx.oidc!.subject) : undefined;
+    if (seat) return seat.id;
+  }
+  const id = resolveIdentity(ctx.bearer, tokenFromArgs);
+  return id?.roomCode === code ? id.playerId : null;
+}
+
 /** Accept a player id or a (unique, case-insensitive) player name. */
 function resolveTarget(state: RoomState, raw: string, forWhat: string): string {
   const trimmed = raw.trim();
@@ -187,8 +243,8 @@ async function resolveRoomCode(ctx: ToolCtx, room: string | undefined): Promise<
   );
 }
 
-export function buildServer(store: RoomStore, bearer?: string): McpServer {
-  const ctx: ToolCtx = { store, bearer };
+export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdentity | null): McpServer {
+  const ctx: ToolCtx = { store, bearer, oidc: oidc ?? null };
   const server = new McpServer(SERVER_INFO, {
     instructions: SERVER_INSTRUCTIONS,
   });
@@ -228,10 +284,11 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
       _meta: uiMeta(),
+      outputSchema: PROJECTION_OUTPUT,
     },
     async ({ name, featured }) => {
       try {
-        const displayName = sanitizeName(name ?? 'The Moderator');
+        const displayName = sanitizeName(name ?? ctx.oidc?.name ?? 'The Moderator');
         const moderatorId = newPlayerId();
         let code = '';
         for (let attempt = 0; ; attempt++) {
@@ -245,6 +302,7 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
                 seed: randomBytes(8).toString('hex'),
                 nowMs: Date.now(),
                 featured: featured ?? true,
+                ...(ctx.oidc ? { subject: ctx.oidc.subject } : {}),
               }),
             );
             break;
@@ -278,11 +336,23 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: uiMeta(),
+      outputSchema: PROJECTION_OUTPUT,
     },
     async ({ room, name, player_token }) => {
       try {
         const code = await resolveRoomCode(ctx, room);
         const { state } = await loadRoom(ctx, code);
+
+        // Signed-in players: the seat is bound to their stable SSO subject.
+        if (ctx.oidc) {
+          const seat = Object.values(state.players).find((p) => p.subject === ctx.oidc!.subject);
+          if (seat) {
+            if (name && sanitizeName(name) && sanitizeName(name) !== seat.name) {
+              await runEvent(store, code, { type: 'JOIN', playerId: seat.id, name, seq: 0, subject: ctx.oidc.subject });
+            }
+            return await project(ctx, code, seat.id, `Welcome back, ${seat.name} — this seat is yours.`);
+          }
+        }
 
         // Already seated on this connection? Just report state (rename if asked).
         const existing = resolveIdentity(ctx.bearer, player_token);
@@ -293,7 +363,7 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
           return await project(ctx, code, existing.playerId, 'You are already in this room.');
         }
 
-        const displayName = sanitizeName(name ?? '');
+        const displayName = sanitizeName(name ?? ctx.oidc?.name ?? '');
         if (!displayName) {
           fail(
             'BAD_TARGET',
@@ -301,17 +371,27 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
           );
         }
 
-        // Same name already seated? Hand back that seat (reconnect path for
-        // players whose chat lost the token). Documented in DECISIONS.md.
+        // Same name already seated? Anonymous seats can be reclaimed by name
+        // (reconnect path for players whose chat lost the token); seats bound
+        // to an SSO subject can never be taken over by name.
         const sameName = Object.values(state.players).find(
           (p) => p.name.toLowerCase() === displayName.toLowerCase(),
         );
         if (sameName) {
+          if (sameName.subject && sameName.subject !== ctx.oidc?.subject) {
+            fail('BAD_TARGET', `The name "${displayName}" is taken in this room — pick a different one.`);
+          }
           return await project(ctx, code, sameName.id, `Welcome back, ${sameName.name} — this seat is yours again.`);
         }
 
         const playerId = newPlayerId();
-        await runEvent(store, code, { type: 'JOIN', playerId, name: displayName, seq: 0 });
+        await runEvent(store, code, {
+          type: 'JOIN',
+          playerId,
+          name: displayName,
+          seq: 0,
+          ...(ctx.oidc ? { subject: ctx.oidc.subject } : {}),
+        });
         return await project(ctx, code, playerId, `Welcome to room ${code}, ${displayName}!`);
       } catch (err) {
         return errorResult(err);
@@ -328,12 +408,12 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
       inputSchema: { room: roomArg, player_token: tokenArg },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: uiMeta(),
+      outputSchema: PROJECTION_OUTPUT,
     },
     async ({ room, player_token }) => {
       try {
         const code = normalizeRoomCode(room);
-        const id = resolveIdentity(ctx.bearer, player_token);
-        return await project(ctx, code, id?.roomCode === code ? id.playerId : null);
+        return await project(ctx, code, await viewerOrNull(ctx, player_token, code));
       } catch (err) {
         return errorResult(err);
       }
@@ -349,6 +429,7 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
       inputSchema: { room: roomArg.optional(), player_token: tokenArg },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: uiMeta(),
+      outputSchema: PROJECTION_OUTPUT,
     },
     async ({ room, player_token }) => {
       try {
@@ -360,12 +441,13 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
                 text: `${RULES_TEXT}\n\nNext step: use join_room to take a seat (no code needed if a game is open).`,
               },
             ],
+            structuredContent: { next_step_hint: 'Use join_room to take a seat — no code needed if a game is open.' },
           };
         }
         const code = normalizeRoomCode(room);
-        const id = resolveIdentity(ctx.bearer, player_token);
+        const viewer = await viewerOrNull(ctx, player_token, code);
         const { state, version } = await loadRoom(ctx, code);
-        const projection = viewFor(state, id?.roomCode === code ? id.playerId : null, version);
+        const projection = viewFor(state, viewer, version);
         return {
           content: [{ type: 'text', text: `${RULES_TEXT}\n\nYour current situation: ${projection.next_step_hint}` }],
           structuredContent: projection as unknown as Record<string, unknown>,
@@ -385,11 +467,12 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
       inputSchema: { room: roomArg, player_token: tokenArg },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
       _meta: uiMeta(),
+      outputSchema: PROJECTION_OUTPUT,
     },
     async ({ room, player_token }) => {
       try {
         const code = normalizeRoomCode(room);
-        const id = identity(ctx, player_token, code);
+        const id = await identityFor(ctx, player_token, code);
         await runEvent(store, code, { type: 'START', byPlayerId: id.playerId });
         return await project(ctx, code, id.playerId, 'The game has begun — roles are dealt, night falls.');
       } catch (err) {
@@ -403,21 +486,70 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
     {
       title: 'Choose your night target',
       description:
-        'At night: mafia pick a victim, doctors pick someone to protect, detectives pick someone to investigate. The server knows your role — just name the target. You can change your choice until dawn.',
+        'At night: mafia pick a victim, doctors pick someone to protect, detectives pick someone to investigate. The server knows your role — just name the target. Omit the target to be asked privately (a picker appears if your app supports it). You can change your choice until dawn.',
       inputSchema: {
         room: roomArg,
-        target_player_id: z.string().describe('The target: a player id (preferred) or their exact display name.'),
+        target_player_id: z
+          .string()
+          .optional()
+          .describe('The target: a player id (preferred) or their exact display name. Omit to be prompted privately.'),
         player_token: tokenArg,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: uiMeta(),
+      outputSchema: PROJECTION_OUTPUT,
     },
-    async ({ room, target_player_id, player_token }) => {
+    async ({ room, target_player_id, player_token }, extra) => {
       try {
         const code = normalizeRoomCode(room);
-        const id = identity(ctx, player_token, code);
+        const id = await identityFor(ctx, player_token, code);
         const { state } = await loadRoom(ctx, code);
-        const targetId = resolveTarget(state, target_player_id, 'as your night target');
+
+        let targetId: string;
+        if (target_player_id && target_player_id.trim().length > 0) {
+          targetId = resolveTarget(state, target_player_id, 'as your night target');
+        } else {
+          // Private picker path: elicit the choice from the human directly.
+          const me = state.players[id.playerId];
+          const role = me?.role;
+          if (!me || !me.alive || state.phase !== 'NIGHT' || !role || role === 'VILLAGER') {
+            // Let the reducer produce its usual teaching error.
+            await runEvent(store, code, { type: 'NIGHT_ACTION', playerId: id.playerId, targetId: 'nobody', seq: 0 });
+            return await project(ctx, code, id.playerId);
+          }
+          const options = Object.values(state.players)
+            .filter((p) => p.alive && !p.spectator && p.role !== null)
+            .filter((p) => (p.id === me.id ? role === 'DOCTOR' : true))
+            .map((p) => ({ id: p.id, name: p.id === me.id ? `${p.name} (yourself)` : p.name }));
+          const prompts: Record<string, [string, string]> = {
+            MAFIA: ['Mafia — choose your victim', 'The family strikes at dawn. Pick tonight’s target.'],
+            DOCTOR: ['Doctor — choose who to protect', 'One life is in your hands tonight (you may pick yourself).'],
+            DETECTIVE: ['Detective — choose who to investigate', 'The truth arrives at dawn, for your eyes only.'],
+          };
+          const [title, message] = prompts[role]!;
+          const outcome = await elicitForm({
+            server,
+            extra: extra as unknown as ElicitCapableExtra,
+            store,
+            message,
+            requestedSchema: targetEnumSchema(title, options),
+          });
+          if (outcome.kind === 'declined') {
+            return await project(ctx, code, id.playerId, 'No action recorded — the night is still young.');
+          }
+          if (outcome.kind === 'unavailable') {
+            fail(
+              'WRONG_PHASE',
+              'I couldn’t show you a private picker here. Open the game panel and tap your target instead — or tell me the name and I’ll pass it along.',
+            );
+          }
+          const chosen = String(outcome.content['target'] ?? '');
+          if (!options.some((o) => o.id === chosen)) {
+            fail('BAD_TARGET', 'That choice is no longer valid — tap Refresh in the app and pick again.');
+          }
+          targetId = chosen;
+        }
+
         await runEvent(store, code, { type: 'NIGHT_ACTION', playerId: id.playerId, targetId, seq: 0 });
         return await project(ctx, code, id.playerId, 'Your night action is in.');
       } catch (err) {
@@ -441,11 +573,12 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
       _meta: uiMeta(),
+      outputSchema: PROJECTION_OUTPUT,
     },
     async ({ room, target_player_id, player_token }) => {
       try {
         const code = normalizeRoomCode(room);
-        const id = identity(ctx, player_token, code);
+        const id = await identityFor(ctx, player_token, code);
         let targetId: string;
         if (target_player_id.trim().toLowerCase() === 'abstain') {
           targetId = 'ABSTAIN';
@@ -475,11 +608,44 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
       inputSchema: { room: roomArg, player_token: tokenArg },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
       _meta: uiMeta(),
+      outputSchema: PROJECTION_OUTPUT,
     },
-    async ({ room, player_token }) => {
+    async ({ room, player_token }, extra) => {
       try {
         const code = normalizeRoomCode(room);
-        const id = identity(ctx, player_token, code);
+        const id = await identityFor(ctx, player_token, code);
+
+        // Closing a vote that banishes NOBODY (tie / no votes) is surprising —
+        // confirm with the moderator when their client supports elicitation.
+        // The normal leader-banished path never double-confirms.
+        const before = await loadRoom(ctx, code);
+        if (before.state.phase === 'DAY_VOTE' && before.state.moderatorId === id.playerId) {
+          const view = viewFor(before.state, id.playerId, before.version);
+          const tally = view.vote?.tally ?? [];
+          const tie = tally.length >= 2 && tally[0]!.count === tally[1]!.count;
+          if (tally.length === 0 || tie) {
+            const outcome = await elicitForm({
+              server,
+              extra: extra as unknown as ElicitCapableExtra,
+              store,
+              message:
+                tally.length === 0
+                  ? 'No votes have been cast — closing now banishes no one. Close the vote anyway?'
+                  : `The vote is tied (${tally[0]!.targetName} and ${tally[1]!.targetName}) — closing now banishes no one. Close the vote anyway?`,
+              requestedSchema: {
+                type: 'object',
+                properties: { confirm: { type: 'boolean', title: 'Close the vote', default: true } },
+                required: ['confirm'],
+              },
+              timeoutMs: 60_000,
+            });
+            if (outcome.kind === 'declined' || (outcome.kind === 'accept' && outcome.content['confirm'] === false)) {
+              return await project(ctx, code, id.playerId, 'The vote stays open.');
+            }
+            // accept or unavailable -> proceed (the app confirm sheet already guarded this).
+          }
+        }
+
         await runEvent(store, code, { type: 'ADVANCE', byPlayerId: id.playerId });
         const result = await project(ctx, code, id.playerId);
         // Lead with the freshest narration so the moderator can read it aloud.
@@ -508,11 +674,12 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
       _meta: uiMeta(),
+      outputSchema: PROJECTION_OUTPUT,
     },
     async ({ room, player_id, player_token }) => {
       try {
         const code = normalizeRoomCode(room);
-        const id = identity(ctx, player_token, code);
+        const id = await identityFor(ctx, player_token, code);
         const { state } = await loadRoom(ctx, code);
         const targetId = resolveTarget(state, player_id, 'to kick them');
         await runEvent(store, code, { type: 'KICK', byPlayerId: id.playerId, targetId });
@@ -532,11 +699,12 @@ export function buildServer(store: RoomStore, bearer?: string): McpServer {
       inputSchema: { room: roomArg, player_token: tokenArg },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
       _meta: uiMeta(),
+      outputSchema: PROJECTION_OUTPUT,
     },
     async ({ room, player_token }) => {
       try {
         const code = normalizeRoomCode(room);
-        const id = identity(ctx, player_token, code);
+        const id = await identityFor(ctx, player_token, code);
         await runEvent(store, code, {
           type: 'RESET',
           byPlayerId: id.playerId,
