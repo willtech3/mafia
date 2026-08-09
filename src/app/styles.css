@@ -46,6 +46,22 @@ body {
   border-radius: var(--radius);
   overflow: hidden;
   min-height: 200px;
+  transition: background 0.8s;
+}
+
+/* Daylight ambience: same village, warmer sky. */
+.app.day {
+  background:
+    radial-gradient(1200px 500px at 20% -10%, rgba(245, 168, 60, 0.12), transparent 60%),
+    radial-gradient(900px 420px at 85% 0%, rgba(245, 200, 120, 0.08), transparent 55%),
+    linear-gradient(180deg, #201a30, var(--bg) 45%);
+}
+
+/* Blood-dusk ambience for the endgame. */
+.app.ended {
+  background:
+    radial-gradient(1200px 500px at 50% -10%, rgba(224, 82, 82, 0.10), transparent 60%),
+    linear-gradient(180deg, #1d1428, var(--bg) 45%);
 }
 
 .boot { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 44px 0; }
@@ -118,7 +134,8 @@ body {
   font-family: var(--serif);
 }
 
-.narration .latest { font-size: 15.5px; line-height: 1.55; }
+.narration .latest { font-size: 15.5px; line-height: 1.55; animation: inkfade 0.6s ease-out; }
+@keyframes inkfade { from { opacity: 0; transform: translateY(4px); } }
 .narration .latest::first-letter { font-size: 1.5em; color: var(--lantern); line-height: 1; }
 
 .narration details { margin-top: 8px; }
@@ -322,6 +339,7 @@ body {
 /* ---------- role card ---------- */
 
 .rolewrap {
+  animation: fadein 0.35s ease-out;
   position: absolute;
   inset: 0;
   z-index: 30;

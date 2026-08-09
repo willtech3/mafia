@@ -126,7 +126,10 @@ app
 function setProjection(next: Projection): void {
   const prev = proj;
   proj = next;
-  if (prev && (prev.room !== next.room || prev.phase !== next.phase)) filterText = '';
+  if (prev && (prev.room !== next.room || prev.phase !== next.phase)) {
+    filterText = '';
+    roleCardOpen = false; // a lingering reveal never outlives its phase
+  }
   room = next.room;
   if (next.player_token) playerToken = next.player_token;
   if (!next.you?.role) roleSeen = false; // lobby / reset / spectator
@@ -333,6 +336,8 @@ function moderatorAction(p: Projection): ModAction | null {
 
 function render(): void {
   root.textContent = '';
+  const day = proj && PHASE_META[proj.phase]?.day && proj.phase !== 'ENDED';
+  root.className = `app${day ? ' day' : ''}${proj?.phase === 'ENDED' ? ' ended' : ''}`;
   if (!proj) {
     root.append(
       h('div', { class: 'empty' }, '🏮 The village sleeps. Say “take me to the mafia game” to begin — or tap Refresh if you’re already playing.'),
