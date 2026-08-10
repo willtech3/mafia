@@ -345,6 +345,35 @@ Updated through Milestone 1 (2026-08-09).
     live 80-seat burst drill (80/80 votes in 4.1s, zero lost); a documented
     future optimization is to fold resolveTarget's read into project's.
 
+## Critique round 2 (perf + infra dimensions + fix verification, 2026-08-09)
+
+50. **Timeout regression caught and fixed.** Round 1 added a 15s client call
+    timeout; the vote-close (tie/empty) confirmation elicit was 60s. Closing
+    such a vote from the app would have shown a false error at ~15s while the
+    server still succeeded ~45s later. Elicit lowered to 12s (under the client
+    timeout); the app's own confirm sheet already gates this path.
+
+51. **Redundant Firestore reads trimmed.** load() now skips the actions
+    subcollection in the 5 phases with no actions to render (assembleState
+    discarded them anyway) — up to ~80 fewer reads per load on the projector
+    poll and get_state outside NIGHT/DAY_VOTE. get_state and how_to_play load
+    the room once (viewerFromState derives the seat from that state) instead
+    of twice — halves reads on the hottest read-only path, biggest win under
+    SSO. Projector SSE poll 2s→4s, max stream 6h→90min. The remaining
+    per-mutating-tool load-once (cast_vote/advance_phase each do 2–3 full
+    loads) is left as a documented optimization: the live 80-seat burst drill
+    already passed against real Firestore (80/80 in 4.1s), so it is not
+    demo-blocking, and threading one StoredRoom through identity + target
+    resolution + post-mutation projection is higher-risk surgery to do right
+    before an install.
+
+52. **Working from a clone.** Mid-round-1 the ~/Desktop/mafia working tree hit
+    a persistent host filesystem I/O stall (reads EINTR'd, then `cd` failed).
+    All work is on the git remote and Cloud Run, so nothing was lost; rounds
+    1–2 finished from a fresh `/tmp/mafia-work` clone, pushing to the same
+    remote (CI deploys). If the Desktop folder is still wedged later, re-clone
+    or reboot — the repo itself is intact.
+
 ## Testing notes
 
 25. Fuzz: 10,000 random full games across n = 5, 6, 7, 12, 40, 80 — all

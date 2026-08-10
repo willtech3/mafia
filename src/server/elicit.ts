@@ -99,6 +99,11 @@ export async function elicitForm(opts: {
 
   const outcome = await Promise.race([direct, relayed]);
   settled = true;
+  // If the same-replica (direct) path won, a copy of the client's response
+  // may still be parked by the http.ts relay — reap it so nothing lingers
+  // (the memory store keeps it for the process lifetime otherwise; Firestore
+  // would hold it until its 1h TTL).
+  void opts.store.takeOrphanResponse(String(uniqueId)).catch(() => undefined);
   return outcome;
 }
 
