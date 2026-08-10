@@ -71,6 +71,51 @@ describe('name-based seat hijack is impossible', () => {
     await Promise.all([mod, victim, attacker].map((c) => c.close()));
   }, 30_000);
 
+  it('a name-less join returns a full RENDERABLE public projection (no crash payload, no secrets)', async () => {
+    const mod = new MafiaClient(url, 'mod3');
+    await mod.connect();
+    const code = (await mod.must('create_room', { name: 'Mod' })).projection!.room;
+
+    const curious = new MafiaClient(url, 'curious');
+    await curious.connect();
+    const ask = await curious.call('join_room', { room: code });
+
+    // A friendly ask, not a red error chip.
+    expect(ask.isError).toBe(false);
+    expect(ask.text).toContain('display name');
+    // The app iframe renders structuredContent: it must be a complete public
+    // projection (phase present), with no seat, token, or private blocks.
+    expect(ask.projection!.phase).toBe('LOBBY');
+    expect(Array.isArray(ask.projection!.players)).toBe(true);
+    expect(ask.projection!.you ?? null).toBeNull();
+    expect((ask.projection as unknown as Record<string, unknown>)['player_token']).toBeUndefined();
+    expect(ask.projection!.mafia).toBeUndefined();
+
+    await Promise.all([mod, curious].map((c) => c.close()));
+  }, 30_000);
+
+  it('30-char names (the sanitize cap) still disambiguate instead of colliding', async () => {
+    const mod = new MafiaClient(url, 'mod4');
+    await mod.connect();
+    const code = (await mod.must('create_room', { name: 'Mod' })).projection!.room;
+
+    const long = 'X'.repeat(30); // sanitizeName caps at 30
+    const a = new MafiaClient(url, 'la');
+    await a.connect();
+    const b = new MafiaClient(url, 'lb');
+    await b.connect();
+    const ja = await a.must('join_room', { room: code, name: long });
+    const jb = await b.must('join_room', { room: code, name: long });
+
+    expect(ja.projection!.you!.name).toBe(long);
+    const second = jb.projection!.you!.name;
+    expect(second).not.toBe(long); // the counter must survive the 30-char cap
+    expect(second.length).toBeLessThanOrEqual(30);
+    expect(second).toMatch(/\(\d+\)$/);
+
+    await Promise.all([mod, a, b].map((c) => c.close()));
+  }, 30_000);
+
   it('two novices with the same name both get seats (disambiguated)', async () => {
     const mod = new MafiaClient(url, 'mod2');
     await mod.connect();

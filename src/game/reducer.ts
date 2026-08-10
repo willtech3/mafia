@@ -213,7 +213,11 @@ export function uniqueDisplayName(state: RoomState, desired: string, exceptId: s
   );
   if (!taken.has(desired.toLowerCase())) return desired;
   for (let n = 2; n < 200; n++) {
-    const candidate = `${desired} (${n})`.slice(0, 30);
+    // Trim the BASE so the counter always survives the 30-char name cap —
+    // slicing the whole candidate would chop the digit off long names and
+    // make every n collapse to the same string (defeating the loop).
+    const suffix = ` (${n})`;
+    const candidate = `${desired.slice(0, 30 - suffix.length)}${suffix}`;
     if (!taken.has(candidate.toLowerCase())) return candidate;
   }
   return desired; // pathological; accept a dup rather than loop forever

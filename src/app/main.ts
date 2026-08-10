@@ -114,7 +114,10 @@ const app = new App({ name: 'Mafia', version: '0.2.0' });
 
 app.ontoolresult = (result) => {
   const sc = (result as { structuredContent?: unknown }).structuredContent as Projection | undefined;
-  if (sc && typeof sc === 'object' && 'room' in sc) setProjection(sc);
+  // Require phase, not just room: a partial payload (e.g. an error surface
+  // that happens to carry a room code) must never reach render(), which
+  // dereferences PHASE_META[phase].
+  if (sc && typeof sc === 'object' && 'room' in sc && 'phase' in sc) setProjection(sc);
 };
 
 app
@@ -176,7 +179,7 @@ async function call(
       toast(result.content?.find((c) => c.type === 'text')?.text ?? 'That didn’t work — try Refresh.');
     } else {
       const sc = result.structuredContent as Projection | undefined;
-      if (sc && 'room' in (sc as object)) {
+      if (sc && 'room' in (sc as object) && 'phase' in (sc as object)) {
         proj = null; // force re-render even if stateVersion matched
         setProjection(sc);
       }

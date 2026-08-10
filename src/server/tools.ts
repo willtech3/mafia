@@ -369,7 +369,8 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
     async ({ room, name, player_token }) => {
       try {
         const code = await resolveRoomCode(ctx, room);
-        const { state } = await loadRoom(ctx, code);
+        const stored = await loadRoom(ctx, code);
+        const { state } = stored;
 
         // Signed-in players: the seat is bound to their stable SSO subject.
         if (ctx.oidc) {
@@ -395,15 +396,16 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
         if (!displayName) {
           // Not an error — a normal "what's your name?" turn (a red failed-tool
           // chip on someone's first interaction is a bad first impression).
-          return {
-            content: [
-              {
-                type: 'text',
-                text: `Room ${code} found! What display name should I seat you under? For example: "join as Sam".`,
-              },
-            ],
-            structuredContent: { room: code, next_step_hint: 'Tell me a display name to take a seat, e.g. "join as Sam".' },
-          };
+          // Return the FULL public projection (viewer null), not a stub: hosts
+          // render the app iframe from structuredContent, and a projection
+          // without phase/players would crash the board on a first-run user.
+          return await project(
+            ctx,
+            code,
+            null,
+            `Room ${code} found! What display name should I seat you under? For example: "join as Sam".`,
+            { preloaded: stored },
+          );
         }
 
         // SECURITY: we never hand back an existing seat based on a public
