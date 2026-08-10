@@ -11,7 +11,7 @@ mid-game and nobody notices).
 
 > ## 🏮 Join the village
 > 1. Open **ChatGPT** (chatgpt.com — laptop browser)
-> 2. Say: **“take me to the mafia game — I’m 〈your first name〉”**
+> 2. Say: **“take me to the mafia game — I’m 〈first name + last initial〉”**
 > 3. When ChatGPT asks to use **Mafia**, click **Connect**, then **Always allow**
 > 4. Your secret role appears when the game starts. **Tap the card. Tell no one.**
 >
@@ -40,14 +40,27 @@ npx tsx src/bots/drill.ts --url https://<service-url>/mcp killgame --seats 12
 npx tsx src/bots/drill.ts --url https://<service-url>/mcp burst
 
 # 4. moderator dry run in ChatGPT: create a room, start with bots, bring one
-#    dawn, reset. Confirm "Always allow" is set on YOUR account.
+#    dawn. Confirm "Always allow" is set on YOUR account. When done, END the
+#    dry-run room (advance it to Game over) — do NOT reset it, because a reset
+#    room returns to a featured LOBBY and would collide with the real game's
+#    blind-join at Beat 0.
 npx tsx src/bots/audience.ts --url https://<service-url>/mcp --join <CODE> --bots 6
+
+# 5. CRITICAL: confirm exactly ZERO featured lobbies remain before you go on.
+#    (Blind "join the mafia game" only works when there is exactly one.)
+node -e "fetch('https://<service-url>/mcp',{method:'POST',headers:{'content-type':'application/json',accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'join_room',arguments:{}}})}).then(r=>r.text()).then(t=>console.log(/NO_FEATURED_ROOM|no open lobby/i.test(t)?'CLEAN: no featured lobby':'WARNING: a featured lobby exists — end it before the show'))"
 ```
 
 - Projector: open `https://<service-url>/room/<CODE>/board` full-screen,
   after creating the room. F11. Dark stage lighting flatters it.
 - Have one phone with Claude + the connector as the mobile fallback demo.
 - Keep `gcloud` authenticated for the kill drill (beat 4).
+- **Names are seats.** Duplicate names auto-disambiguate ("Sam", "Sam (2)"),
+  so two people named Sam is fine. But there is no reclaim-by-name mid-game:
+  if a player's chat loses its token, they rejoin as a spectator (or the
+  moderator kicks the orphan). Keep the moderator's tab alive; if it dies,
+  the token is still in that chat's history — reopen it rather than starting
+  fresh.
 
 ## 3 · On-stage beats
 
@@ -98,9 +111,9 @@ loses people fast enough to feel dangerous.
 
 | Symptom | Move |
 |---|---|
-| A player's chat lost its token / connector wedged | New chat → "rejoin room CODE as 〈exact name〉" — the seat comes back |
+| A player's chat lost its token | Reopen that SAME chat (the token is in its history). A brand-new chat can't reclaim the seat by name — they'd rejoin as a spectator, which is fine for the demo. |
 | Player says "it says I can't act" | They're dead, or wrong phase — the error text says which; Refresh in the app |
-| Moderator chat dies | Any new chat: "join room CODE as 〈moderator name〉" — moderator seat reclaims by exact name |
+| Moderator chat dies | Reopen the moderator's original chat (token is in its history). Keep that tab pinned during the show. In an SSO/enterprise install the moderator seat rebinds automatically on reconnect. |
 | ChatGPT connector misbehaves workspace-wide | Claude custom connector is the standby client; the game is fully playable by text |
 | Projector board frozen | It reconnects automatically; hard-refresh the browser tab if not |
 | Room polluted / wrong state | `reset_room` (same crowd, fresh deal) or create a fresh room |

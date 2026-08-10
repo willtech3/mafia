@@ -95,13 +95,18 @@ let proj: Projection | null = null;
 let playerToken: string | null = null;
 let room: string | null = null;
 let busy = false;
+let veilVisible = false; // only dim the board for user-initiated calls, not background polls
 let filterText = '';
 let autoPoll = false;
 let autoPollTimer: number | null = null;
 let roleSeen = false;
 let roleCardOpen = false;
 let cardFlipped = false;
-let sheet: { title: string; detail: string; confirmLabel: string; danger?: boolean; action: () => Promise<void> } | null = null;
+let narrationOpen = false;
+let fallenOpen: boolean | null = null; // null = default (open when few dead / reveal)
+let sheet:
+  | { title: string; detail: string; confirmLabel: string; danger?: boolean; phaseAt: string; action: () => Promise<void> }
+  | null = null;
 
 const root = document.getElementById('app')!;
 
@@ -129,6 +134,8 @@ function setProjection(next: Projection): void {
   if (prev && (prev.room !== next.room || prev.phase !== next.phase)) {
     filterText = '';
     roleCardOpen = false; // a lingering reveal never outlives its phase
+    sheet = null; // a confirm captured in the old phase must not fire in the new one
+    fallenOpen = null;
   }
   room = next.room;
   if (next.player_token) playerToken = next.player_token;
@@ -142,19 +149,29 @@ function setProjection(next: Projection): void {
   render();
 }
 
-async function call(tool: string, args: Record<string, unknown> = {}, okMsg?: string): Promise<void> {
+const CALL_TIMEOUT_MS = 15_000;
+
+async function call(
+  tool: string,
+  args: Record<string, unknown> = {},
+  okMsg?: string,
+  opts: { background?: boolean } = {},
+): Promise<void> {
   if (busy) return;
   busy = true;
+  veilVisible = !opts.background; // background autopolls never dim/block the board
   render();
   try {
     const merged: Record<string, unknown> = { ...args };
     if (room && merged['room'] === undefined) merged['room'] = room;
     if (playerToken && merged['player_token'] === undefined) merged['player_token'] = playerToken;
-    const result = (await app.callServerTool({ name: tool, arguments: merged })) as {
-      isError?: boolean;
-      content?: { type: string; text?: string }[];
-      structuredContent?: unknown;
-    };
+    // Race the bridge against a timeout so a host that never settles the
+    // promise (backgrounded phone, host hiccup) can't leave the app bricked
+    // with busy stuck true forever.
+    const result = (await Promise.race([
+      app.callServerTool({ name: tool, arguments: merged }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), CALL_TIMEOUT_MS)),
+    ])) as { isError?: boolean; content?: { type: string; text?: string }[]; structuredContent?: unknown };
     if (result.isError) {
       toast(result.content?.find((c) => c.type === 'text')?.text ?? 'That didn’t work — try Refresh.');
     } else {
@@ -167,15 +184,16 @@ async function call(tool: string, args: Record<string, unknown> = {}, okMsg?: st
     }
   } catch (err) {
     console.error(tool, err);
-    toast('Lost contact with the village. Tap Refresh to retry.');
+    if (!opts.background) toast('The village didn’t answer. Tap Refresh to try again.');
   } finally {
     busy = false;
+    veilVisible = false;
     render();
   }
 }
 
-function refresh(): void {
-  if (room) void call('get_state', {});
+function refresh(opts: { background?: boolean } = {}): void {
+  if (room) void call('get_state', {}, undefined, opts);
 }
 
 function setAutoPoll(on: boolean): void {
@@ -186,7 +204,10 @@ function setAutoPoll(on: boolean): void {
   }
   if (on) {
     autoPollTimer = window.setInterval(() => {
-      if (!busy && !sheet && document.visibilityState === 'visible') refresh();
+      // Don't poll while a sheet is open or the player is typing in the filter —
+      // a re-render would blow away the sheet / the input focus.
+      const typing = document.activeElement?.classList.contains('filter');
+      if (!busy && !sheet && !typing && document.visibilityState === 'visible') refresh({ background: true });
     }, 10_000);
   }
   render();
@@ -223,9 +244,12 @@ function btn(label: string, cls: string, onclick: () => void, disabled = false):
 
 let toastTimer: number | null = null;
 function toast(message: string, ok = false): void {
+  // Append to document.body, NOT the #app root — render() wipes root on every
+  // call, which would destroy the toast before it ever painted. Body + fixed
+  // positioning (see .toast in styles.css) keeps feedback visible.
   document.querySelectorAll('.toast').forEach((t) => t.remove());
   const el = h('div', { class: `toast${ok ? ' ok' : ''}` }, message);
-  root.append(el);
+  document.body.append(el);
   if (toastTimer !== null) clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => el.remove(), ok ? 2600 : 5200);
 }
@@ -243,7 +267,13 @@ function avatarFor(name: string, dead = false): HTMLElement {
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/);
-  const chars = parts.length >= 2 ? parts[0]![0]! + parts[parts.length - 1]![0]! : name.slice(0, 2);
+  // Iterate by code point, not UTF-16 unit, so an emoji-first name
+  // ("🎃 Pumpkin King") yields a whole glyph, not a broken surrogate half.
+  const first = (s: string) => [...s][0] ?? '';
+  const chars =
+    parts.length >= 2
+      ? first(parts[0]!) + first(parts[parts.length - 1]!)
+      : [...name].slice(0, 2).join('');
   return chars.toUpperCase();
 }
 
@@ -275,6 +305,7 @@ function pickTarget(p: Projection, tile: Tile, mode: NonNullable<TargetMode>): v
       title: `Vote to banish ${tile.name}?`,
       detail: 'You can change your vote until the moderator closes it.',
       confirmLabel: '🗳️ Cast vote',
+      phaseAt: p.phase,
       action: () => call('cast_vote', { target_player_id: tile.id }, `Your vote: ${tile.name}`),
     };
   } else {
@@ -288,6 +319,7 @@ function pickTarget(p: Projection, tile: Tile, mode: NonNullable<TargetMode>): v
       title,
       detail,
       confirmLabel,
+      phaseAt: p.phase,
       action: () => call('submit_night_action', { target_player_id: tile.id }, 'Locked in — you can still change it before dawn.'),
     };
   }
@@ -335,12 +367,22 @@ function moderatorAction(p: Projection): ModAction | null {
 // render
 
 function render(): void {
+  // Preserve filter focus/caret across the full rebuild (autopoll + host
+  // pushes re-render while the player may be mid-word searching 80 names).
+  const active = document.activeElement;
+  const refocusFilter = active instanceof HTMLInputElement && active.classList.contains('filter');
+  const caret = refocusFilter ? active.selectionStart : null;
+
   root.textContent = '';
   const day = proj && PHASE_META[proj.phase]?.day && proj.phase !== 'ENDED';
   root.className = `app${day ? ' day' : ''}${proj?.phase === 'ENDED' ? ' ended' : ''}`;
   if (!proj) {
     root.append(
-      h('div', { class: 'empty' }, '🏮 The village sleeps. Say “take me to the mafia game” to begin — or tap Refresh if you’re already playing.'),
+      h(
+        'div',
+        { class: 'empty' },
+        '🏮 The village sleeps. Say “take me to the mafia game” to join — or “rejoin room CODE as your name” if you were already playing.',
+      ),
     );
     return;
   }
@@ -361,7 +403,15 @@ function render(): void {
 
   if (roleCardOpen && p.you?.role && p.phase !== 'LOBBY' && p.phase !== 'ENDED') renderRoleCard(p);
   if (sheet) renderSheet();
-  if (busy) root.append(h('div', { class: 'busyveil' }));
+  if (busy && veilVisible) root.append(h('div', { class: 'busyveil' }));
+
+  if (refocusFilter) {
+    const again = root.querySelector<HTMLInputElement>('.filter');
+    if (again) {
+      again.focus();
+      if (caret !== null) again.setSelectionRange(caret, caret);
+    }
+  }
 }
 
 function renderTop(p: Projection): void {
@@ -374,7 +424,9 @@ function renderTop(p: Projection): void {
     h('span', { class: 'spacer' }),
   );
 
-  if (p.you?.role && p.phase !== 'LOBBY') {
+  // Role card is meaningful only while a game is in progress (not lobby, and
+  // not ENDED where the victory screen already reveals everyone).
+  if (p.you?.role && p.phase !== 'LOBBY' && p.phase !== 'ENDED') {
     const roleBtn = h('button', { class: 'iconbtn', title: 'Show my role card' }, ROLE_ART[p.you.role]?.icon ?? '🎭', ' Role');
     roleBtn.onclick = () => {
       roleCardOpen = true;
@@ -388,7 +440,7 @@ function renderTop(p: Projection): void {
   pollBtn.onclick = () => setAutoPoll(!autoPoll);
 
   const refreshBtn = h('button', { class: 'iconbtn', title: 'Refresh now' }, busy ? h('span', { class: 'spin' }, '↻') : '↻', ' Refresh');
-  refreshBtn.onclick = refresh;
+  refreshBtn.onclick = () => refresh();
   (refreshBtn as HTMLButtonElement).disabled = busy;
 
   bar.append(pollBtn, refreshBtn);
@@ -400,7 +452,10 @@ function renderNarration(p: Projection): void {
   const latest = p.narration[p.narration.length - 1]!;
   const box = h('div', { class: 'narration' }, h('div', { class: 'latest' }, latest.text));
   if (p.narration.length > 1) {
-    const details = h('details', {}, h('summary', {}, `📜 The story so far (${p.narration.length - 1})`));
+    const details = h('details', { open: narrationOpen }, h('summary', {}, `📜 The story so far (${p.narration.length - 1})`));
+    (details as HTMLDetailsElement).ontoggle = () => {
+      narrationOpen = (details as HTMLDetailsElement).open;
+    };
     for (const entry of p.narration.slice(0, -1).reverse()) {
       details.append(h('div', { class: 'old' }, entry.text));
     }
@@ -447,6 +502,7 @@ function renderPrompt(p: Projection): void {
         title: 'Abstain from this vote?',
         detail: 'Sometimes silence is a strategy too.',
         confirmLabel: '🤷 Abstain',
+        phaseAt: p.phase,
         action: () => call('cast_vote', { target_player_id: 'abstain' }, 'You are abstaining.'),
       };
       render();
@@ -577,7 +633,13 @@ function renderGrid(p: Projection, opts: GridOpts): void {
   wrap.append(grid);
 
   if (dead.length > 0) {
-    const fallen = h('details', { class: 'fallen', open: opts.reveal || dead.length <= 6 }, h('summary', {}, `🪦 The fallen (${dead.length})`));
+    // Remember the player's expand/collapse choice across re-renders (autopoll
+    // otherwise snaps the list shut under their finger every 10s).
+    const open = fallenOpen ?? (opts.reveal || dead.length <= 6);
+    const fallen = h('details', { class: 'fallen', open }, h('summary', {}, `🪦 The fallen (${dead.length})`));
+    (fallen as HTMLDetailsElement).ontoggle = () => {
+      fallenOpen = (fallen as HTMLDetailsElement).open;
+    };
     const deadGrid = h('div', { class: `grid${p.players.length > 40 ? ' compact' : ''}` });
     for (const tile of dead.filter(match)) deadGrid.append(renderTile(p, tile, null, revealRoles, opts));
     fallen.append(deadGrid);
@@ -635,12 +697,13 @@ function renderModBar(p: Projection): void {
   const bar = h('div', { class: 'modbar' });
   if (action) {
     bar.append(
-      btn(action.label, action.danger ? 'primary' : 'primary', () => {
+      btn(action.label, action.danger ? 'danger' : 'primary', () => {
         sheet = {
           title: action.label.replace(/^\S+\s/, ''),
           detail: action.detail,
           confirmLabel: action.label,
           danger: action.danger ?? false,
+          phaseAt: p.phase,
           action: () => call(action.tool, {}),
         };
         render();
@@ -713,11 +776,18 @@ function renderRoleCard(p: Projection): void {
 function renderSheet(): void {
   if (!sheet) return;
   const current = sheet;
+  const close = () => {
+    sheet = null;
+    render();
+  };
   const veil = h('div', { class: 'sheetveil' });
   veil.onclick = (ev) => {
-    if (ev.target === veil) {
-      sheet = null;
-      render();
+    if (ev.target === veil) close();
+  };
+  veil.onkeydown = (ev) => {
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      close();
     }
   };
   const box = h(
@@ -727,17 +797,24 @@ function renderSheet(): void {
     h('div', { class: 'd' }, current.detail),
   );
   const btns = h('div', { class: 'btns' });
-  btns.append(
-    btn('Cancel', 'ghost', () => {
-      sheet = null;
+  const confirmBtn = btn(current.confirmLabel, current.danger ? 'danger' : 'primary', () => {
+    sheet = null;
+    // Guard against phase drift: if the world moved on while this sheet was
+    // open (moderator advanced via chat, autopoll landed), don't fire a stale
+    // action into the wrong phase.
+    if (proj && proj.phase !== current.phaseAt) {
       render();
-    }),
-    btn(current.confirmLabel, current.danger ? 'danger' : 'primary', () => {
-      sheet = null;
-      void current.action();
-    }),
+      toast('The game moved on — that action no longer applies.');
+      return;
+    }
+    void current.action();
+  });
+  btns.append(
+    btn('Cancel', 'ghost', close),
+    confirmBtn,
   );
   box.append(btns);
   veil.append(box);
   root.append(veil);
+  confirmBtn.focus(); // keyboard/switch users land on the confirm, not 80 tiles away
 }

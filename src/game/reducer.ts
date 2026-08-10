@@ -178,7 +178,7 @@ function applyJoin(
   const next = clone(state);
   const existing = next.players[event.playerId];
   if (existing) {
-    existing.name = name; // idempotent re-join / rename
+    existing.name = uniqueDisplayName(next, name, existing.id); // idempotent re-join / rename
     if (event.subject) existing.subject = event.subject;
     return next;
   }
@@ -188,7 +188,7 @@ function applyJoin(
   const spectator = !inLobby || roomFull;
   next.players[event.playerId] = {
     id: event.playerId,
-    name,
+    name: uniqueDisplayName(next, name, event.playerId),
     role: null,
     alive: true,
     isModerator: false,
@@ -197,6 +197,26 @@ function applyJoin(
     ...(event.subject ? { subject: event.subject } : {}),
   };
   return next;
+}
+
+/**
+ * Make a display name unique within the room by suffixing "(2)", "(3)"...
+ * Runs inside the reducer (full state, inside the store transaction), so two
+ * novices both named "Sam" get "Sam" and "Sam (2)" rather than a collision.
+ * `exceptId` lets an existing seat keep its own name on rename.
+ */
+export function uniqueDisplayName(state: RoomState, desired: string, exceptId: string): string {
+  const taken = new Set(
+    Object.values(state.players)
+      .filter((p) => p.id !== exceptId)
+      .map((p) => p.name.toLowerCase()),
+  );
+  if (!taken.has(desired.toLowerCase())) return desired;
+  for (let n = 2; n < 200; n++) {
+    const candidate = `${desired} (${n})`.slice(0, 30);
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+  return desired; // pathological; accept a dup rather than loop forever
 }
 
 function applyStart(state: RoomState, event: { byPlayerId: string }): RoomState {

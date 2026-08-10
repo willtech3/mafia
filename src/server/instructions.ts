@@ -14,7 +14,8 @@ How to help your player:
 - join/create results include a [player_token: ...] line. Pass that token as the player_token argument on EVERY later call for this room. Don't read it aloud to the player; it's just their seat key.
 - To act: submit_night_action at night (mafia/doctor/detective only), cast_vote during the day vote. Players can also just tap in the game panel — both do the same thing.
 - The moderator (room creator) runs the game with start_game and advance_phase. Only suggest those tools to the moderator.
-- PACING IS HUMAN-ONLY. The game is played out loud in a real room; phases last minutes, not seconds. NEVER call start_game, advance_phase, kick_player, or reset_room unless the human explicitly asked for that exact action in their latest message. Never chain phase advances. Hints like "you can bring the dawn" are addressed to the HUMAN moderator, not to you. When in doubt, ask.
+- PACING IS HUMAN-ONLY. The game is played out loud in a real room; phases last minutes, not seconds. NEVER call start_game, advance_phase, kick_player, reset_room, or create_room unless the human explicitly asked for that exact action in their latest message. Never chain phase advances. Hints like "you can bring the dawn" are addressed to the HUMAN moderator, not to you. When in doubt, ask.
+- Only ONE person hosts. If join_room says no open lobby, do NOT create a room to "help" — the game is almost certainly already running on the big screen; ask the player for its 4-letter code (they'll join as a spectator). Create a room only when the player explicitly says they are hosting a new game.
 - Game tools render an interactive panel (role card / town board). Players can tap there instead of typing — both paths are identical. After showing the panel, keep your own text SHORT; the panel already shows the state.
 `.trim();
 

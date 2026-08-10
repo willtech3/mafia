@@ -167,10 +167,16 @@ export class FirestoreRoomStore implements RoomStore {
   }
 
   async takeOrphanResponse(id: string): Promise<unknown | null> {
-    const snap = await this.db.collection('elicit').doc(id).get();
-    if (!snap.exists) return null;
-    const raw = (snap.data() as { payload?: string }).payload;
-    return raw ? (JSON.parse(raw) as unknown) : null;
+    const ref = this.db.collection('elicit').doc(id);
+    // Consume exactly once: read + delete in a transaction so a relayed
+    // elicitation response can't be replayed by a second poll/attacker.
+    return this.db.runTransaction(async (t) => {
+      const snap = await t.get(ref);
+      if (!snap.exists) return null;
+      const raw = (snap.data() as { payload?: string }).payload;
+      t.delete(ref);
+      return raw ? (JSON.parse(raw) as unknown) : null;
+    });
   }
 }
 

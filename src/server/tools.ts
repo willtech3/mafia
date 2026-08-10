@@ -231,9 +231,12 @@ function resolveTarget(state: RoomState, raw: string, forWhat: string): string {
   const byName = Object.values(state.players).filter((p) => p.name.toLowerCase() === lower);
   if (byName.length === 1) return byName[0]!.id;
   if (byName.length > 1) {
+    // List the candidate ids inline — on Claude the model can't read
+    // structuredContent, so "check get_state for ids" would dead-end.
+    const options = byName.map((p) => `${p.name} (${p.id})`).join(', ');
     fail(
       'BAD_TARGET',
-      `More than one player is named "${trimmed}". Use their player id from the player list instead (get_state shows ids).`,
+      `More than one player is named "${trimmed}": ${options}. Tell me the exact id ${forWhat}, or tap them on the game panel.`,
     );
   }
   fail(
@@ -247,9 +250,13 @@ async function resolveRoomCode(ctx: ToolCtx, room: string | undefined): Promise<
   const lobbies = await ctx.store.findFeaturedLobbies();
   if (lobbies.length === 1) return lobbies[0]!;
   if (lobbies.length === 0) {
+    // Deliberately does NOT suggest create_room: a game already on the big
+    // screen has left LOBBY, so latecomers must join it by its 4-letter code
+    // (as spectators). Steering novices to create_room here spawns stray
+    // featured lobbies and a wrong-room cascade.
     fail(
       'NO_FEATURED_ROOM',
-      'No game is waiting for players right now. Ask your host for a room code, or create your own room with create_room.',
+      'No open lobby to join right now. If a game is already up on the big screen, tell me its 4-letter room code to watch it. (Only create your own room if you are the one hosting.)',
     );
   }
   fail(
@@ -381,25 +388,26 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
 
         const displayName = sanitizeName(name ?? ctx.oidc?.name ?? '');
         if (!displayName) {
-          fail(
-            'BAD_TARGET',
-            `Room ${code} found! Now I just need your display name to seat you — for example: "join as Sam".`,
-          );
+          // Not an error — a normal "what's your name?" turn (a red failed-tool
+          // chip on someone's first interaction is a bad first impression).
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Room ${code} found! What display name should I seat you under? For example: "join as Sam".`,
+              },
+            ],
+            structuredContent: { room: code, next_step_hint: 'Tell me a display name to take a seat, e.g. "join as Sam".' },
+          };
         }
 
-        // Same name already seated? Anonymous seats can be reclaimed by name
-        // (reconnect path for players whose chat lost the token); seats bound
-        // to an SSO subject can never be taken over by name.
-        const sameName = Object.values(state.players).find(
-          (p) => p.name.toLowerCase() === displayName.toLowerCase(),
-        );
-        if (sameName) {
-          if (sameName.subject && sameName.subject !== ctx.oidc?.subject) {
-            fail('BAD_TARGET', `The name "${displayName}" is taken in this room — pick a different one.`);
-          }
-          return await project(ctx, code, sameName.id, `Welcome back, ${sameName.name} — this seat is yours again.`, { includeSeatKey: true });
-        }
-
+        // SECURITY: we never hand back an existing seat based on a public
+        // display name — names are visible to everyone (board + projector), so
+        // reclaiming by name would leak that seat's secret role and mint its
+        // token to a stranger. A token-less same-name joiner always gets a NEW
+        // seat; the reducer disambiguates the display name ("Sam" -> "Sam (2)").
+        // Legitimate reconnects come from the SSO subject (bound above) or the
+        // player_token the client already holds (handled above).
         const playerId = newPlayerId();
         await runEvent(store, code, {
           type: 'JOIN',
@@ -549,6 +557,10 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
             store,
             message,
             requestedSchema: targetEnumSchema(title, options),
+            // Short: if a client neither supports nor cleanly rejects
+            // elicitation, fall back to the tap path fast rather than stalling
+            // the tool call past the host's timeout on stage.
+            timeoutMs: 20_000,
           });
           if (outcome.kind === 'declined') {
             return await project(ctx, code, id.playerId, 'No action recorded — the night is still young.');

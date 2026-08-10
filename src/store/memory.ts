@@ -152,7 +152,10 @@ export class MemoryRoomStore implements RoomStore {
   }
 
   async takeOrphanResponse(id: string): Promise<unknown | null> {
-    return this.orphans.has(id) ? this.orphans.get(id)! : null;
+    if (!this.orphans.has(id)) return null;
+    const value = this.orphans.get(id)!;
+    this.orphans.delete(id); // consume exactly once — no replay
+    return value;
   }
 
   private nextVersion(): number {

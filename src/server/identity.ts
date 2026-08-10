@@ -14,7 +14,23 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
  * verify them without touching the store.
  */
 
-const SECRET = process.env['MAFIA_TOKEN_SECRET'] ?? 'dev-secret-not-for-production';
+/**
+ * The HMAC key for player tokens. In a deployed context (Cloud Run sets
+ * K_REVISION) a missing secret is fatal: booting with the public dev default
+ * would let anyone forge a token for any seat, including the moderator's.
+ * Terraform wires MAFIA_TOKEN_SECRET from Secret Manager; this is the guard
+ * for a hand-rolled `gcloud run deploy` or a misconfigured revision.
+ */
+const SECRET = (() => {
+  const fromEnv = process.env['MAFIA_TOKEN_SECRET'];
+  if (fromEnv) return fromEnv;
+  if (process.env['K_REVISION'] || process.env['NODE_ENV'] === 'production') {
+    throw new Error(
+      'MAFIA_TOKEN_SECRET is required in production (K_REVISION/NODE_ENV set) — refusing to boot with the dev default.',
+    );
+  }
+  return 'dev-secret-not-for-production';
+})();
 
 export interface PlayerIdentity {
   roomCode: string;

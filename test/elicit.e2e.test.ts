@@ -37,22 +37,25 @@ afterAll(() => {
   serverB?.close();
 });
 
-/** Room in NIGHT with a known mafia client attached. */
+/**
+ * Room in NIGHT with a known mafia client attached. Every player client is
+ * built with `mafiaOpts` (the elicit handler / cross-fetch), so whichever seat
+ * is dealt MAFIA already has the capability — no name-reclaim needed (name
+ * reclaim is deliberately impossible now; see security.e2e.test.ts).
+ */
 async function nightRoom(mafiaOpts: ConstructorParameters<typeof MafiaClient>[2]) {
-  const mod = new MafiaClient(urlA, 'mod');
+  const mod = new MafiaClient(urlA, 'mod', mafiaOpts);
   await mod.connect();
   const created = await mod.must('create_room', { name: 'Mod', featured: false });
   const code = created.projection!.room;
   const players: MafiaClient[] = [];
   for (let i = 1; i <= 6; i++) {
-    const p = new MafiaClient(urlA, `P${i}`, i === 1 ? mafiaOpts : {});
+    const p = new MafiaClient(urlA, `P${i}`, mafiaOpts);
     await p.connect();
     await p.must('join_room', { room: code, name: `P${i}` });
     players.push(p);
   }
   await mod.must('start_game', { room: code });
-  // Find each player's role through their own eyes; ensure P1 is remade as
-  // the mafia member by reconnecting the mafia's seat with the test options.
   const everyone = [mod, ...players];
   let mafia: MafiaClient | undefined;
   for (const p of everyone) {
@@ -60,14 +63,6 @@ async function nightRoom(mafiaOpts: ConstructorParameters<typeof MafiaClient>[2]
     if (view.you?.role === 'MAFIA') mafia = p;
   }
   if (!mafia) throw new Error('no mafia found');
-  if (mafiaOpts && mafia.name !== 'P1') {
-    // Reclaim the mafia seat with a client configured with mafiaOpts.
-    const stunt = new MafiaClient(urlA, `stunt-${mafia.name}`, mafiaOpts);
-    await stunt.connect();
-    const reply = await stunt.must('join_room', { room: code, name: mafia.name }, );
-    expect(reply.projection!.you!.role).toBe('MAFIA');
-    mafia = stunt;
-  }
   return { code, mod, mafia, everyone };
 }
 

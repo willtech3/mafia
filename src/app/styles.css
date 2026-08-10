@@ -340,7 +340,10 @@ body {
 
 .rolewrap {
   animation: fadein 0.35s ease-out;
-  position: absolute;
+  /* fixed (not absolute): pin to the visible card, not the top of a board
+     that can be ~1800px tall at 80 players — otherwise a sheet/card opens
+     off-screen from where the player tapped. */
+  position: fixed;
   inset: 0;
   z-index: 30;
   display: flex;
@@ -428,7 +431,7 @@ body {
 /* ---------- confirm sheet & toast ---------- */
 
 .sheetveil {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 40;
   background: rgba(8, 6, 16, 0.6);
@@ -460,7 +463,7 @@ body {
 .sheet .btns .btn { min-width: 120px; }
 
 .toast {
-  position: absolute;
+  position: fixed;
   left: 50%;
   bottom: 14px;
   transform: translateX(-50%);
@@ -488,7 +491,16 @@ body {
   font-size: 15px;
 }
 
-.busyveil { position: absolute; inset: 0; z-index: 45; cursor: progress; }
+.busyveil {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  cursor: progress;
+  /* A faint dim so a mid-action wait reads as "working", not a dead tap.
+     Only mounted for user-initiated calls (never background autopolls). */
+  background: rgba(8, 6, 16, 0.18);
+  animation: fadein 0.12s ease-out;
+}
 
 @media (max-width: 460px) {
   .app { padding: 10px 10px 14px; }

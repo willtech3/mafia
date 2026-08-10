@@ -45,9 +45,13 @@ export async function elicitForm(opts: {
 }): Promise<ElicitOutcome> {
   const timeoutMs = opts.timeoutMs ?? 90_000;
 
-  // Unique-enough JSON-RPC id: seconds-of-year * 1000 + random. Fits easily
-  // in a double, unique across replicas for our traffic.
-  const uniqueId = (Math.floor(Date.now() / 1000) % 31_536_000) * 100_000 + randomInt(0, 99_999);
+  // Unguessable JSON-RPC id (~48 bits of entropy, safe-integer range). The
+  // relay parks unmatched responses by this id, so a guessable id would let an
+  // attacker POST a forged elicitation answer (a night kill / doctor save /
+  // detective probe) into a victim's open picker. Each stateless request gets
+  // its own McpServer, so this id only needs to be unguessable, not globally
+  // unique. Combined with delete-on-take in the store, replay is closed too.
+  const uniqueId = randomInt(1, 281_474_976_710_655);
   (opts.server.server as unknown as { _requestMessageId: number })._requestMessageId = uniqueId;
 
   let settled = false;

@@ -75,13 +75,18 @@ describe('SSO identity', () => {
     await bob.connect();
     const bobJoin = await bob.must('join_room', { room: code });
     expect(bobJoin.projection!.you!.name).toBe('Bob');
+    const bobSeatId = bobJoin.projection!.you!.id;
 
-    // An anonymous chancer cannot steal Bob's subject-bound seat by name.
+    // An anonymous chancer claiming Bob's name never gets Bob's seat: they get
+    // a fresh, disambiguated seat instead (no error, no takeover, no leak).
     const thief = new MafiaClient(url, 'thief');
     await thief.connect();
-    const theft = await thief.call('join_room', { room: code, name: 'Bob' });
-    expect(theft.isError).toBe(true);
-    expect(theft.text).toContain('taken');
+    const theft = await thief.must('join_room', { room: code, name: 'Bob' });
+    expect(theft.projection!.you!.id).not.toBe(bobSeatId);
+    expect(theft.projection!.you!.name).not.toBe('Bob'); // disambiguated
+    // Bob's real seat is untouched.
+    const bobRecheck = await bob.must('get_state', { room: code });
+    expect(bobRecheck.projection!.you!.id).toBe(bobSeatId);
 
     // The SSO subject never appears in any projection.
     for (const reply of [state, rejoin, bobJoin]) {
