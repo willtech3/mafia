@@ -285,6 +285,66 @@ Updated through Milestone 1 (2026-08-09).
     names reserved account-side (the original "Mafia" name is burned on this
     account); the enterprise workspace publish will use the clean name.
 
+## Critique round 1 (adversarial 8-dimension review, 2026-08-09)
+
+43. **P0 fixed — name-based seat hijack / role leak.** join_room previously
+    handed back an existing seat (its minted token + the viewFor projection
+    with that seat's secret role) to anyone who supplied its public display
+    name. Names are public (board + projector), so a stranger could read a
+    name off the big screen and pull that player's role, or reclaim the
+    moderator seat and run the game. Fix: never reclaim a seat by name — a
+    token-less same-name join always creates a NEW seat; the reducer
+    disambiguates the display name ("Sam" → "Sam (2)") race-safely inside the
+    store transaction. This also fixes the two-novices-named-Sam collision.
+    Legitimate reconnect is via SSO subject (production) or the player_token
+    the client already holds. Regression test: test/security.e2e.test.ts.
+
+44. **Reconnect-by-name is gone by design.** Consequence of #43: a player
+    whose chat truly loses its token cannot self-recover a roled seat mid-game
+    (they rejoin as a spectator). Accepted — in the enterprise/SSO install
+    (the actual target) seats rebind to the subject automatically; in the
+    no-auth demo the token persists in the chat history, so "reopen that chat"
+    recovers it. Runbook updated.
+
+45. **Elicitation relay hardened.** Request id is now 48-bit crypto-random
+    (was time-derived + 5 random digits, brute-forceable within the poll
+    window), and takeOrphanResponse deletes on read (memory + a Firestore
+    transaction) so a parked response can't be forged into a victim's open
+    picker or replayed. Full per-room binding wasn't added because the relay
+    only sees the bare JSON-RPC response id; unguessable-id + single-use
+    closes the practical attack.
+
+46. **Production secret guard.** identity.ts throws at boot if
+    MAFIA_TOKEN_SECRET is missing while K_REVISION/NODE_ENV=production is set,
+    rather than silently using the public dev default (which would let anyone
+    forge tokens). Terraform already wires the secret; this guards a manual
+    deploy.
+
+47. **First-run cascade fixed.** NO_FEATURED_ROOM no longer tells the model to
+    create_room (a latecomer joining after the game started would otherwise
+    spawn a stray featured lobby and misroute subsequent blind joins);
+    create_room is now in the human-only pacing rule in the server
+    instructions.
+
+48. **App UI demo-breakers.** Overlays (confirm sheet, role card, busy veil,
+    toast) were position:absolute on a board that is ~1800px tall at 80
+    players, so a tap near the top opened the sheet off-screen; and toasts
+    were appended to the render() root and wiped before paint (all feedback
+    invisible). Both fixed (fixed-positioning; toasts on document.body).
+    Plus: sheet cleared on phase change + phase-drift guard on confirm,
+    focus/caret and <details> state preserved across autopoll re-renders,
+    15s call timeout, danger-styled moderator buttons, grapheme-safe initials.
+
+49. **Two review dimensions (perf, infra) could not run** — the reviewer
+    sandboxes hit a host filesystem I/O stall reading ~/Desktop/mafia (the
+    same fault later wedged the folder entirely; work continued from a fresh
+    /tmp clone against the git remote). The perf analysis was done by hand
+    instead: hot paths are get_state (~161 doc reads at n=80: core + 80
+    players + 80 actions) and cast_vote (loadRoom for resolveTarget + txn +
+    project's re-read). Acceptable for a 2–3 round demo and validated by the
+    live 80-seat burst drill (80/80 votes in 4.1s, zero lost); a documented
+    future optimization is to fold resolveTarget's read into project's.
+
 ## Testing notes
 
 25. Fuzz: 10,000 random full games across n = 5, 6, 7, 12, 40, 80 — all
