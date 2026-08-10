@@ -161,9 +161,11 @@ async function project(
   code: string,
   playerId: string | null,
   lead?: string,
-  opts: { includeSeatKey?: boolean } = {},
+  opts: { includeSeatKey?: boolean; preloaded?: { state: RoomState; version: number } } = {},
 ): Promise<CallToolResult> {
-  const { state, version } = await loadRoom(ctx, code);
+  // Read-only tools pass the state they already loaded so the hottest paths
+  // (get_state, how_to_play) don't load the room twice per call.
+  const { state, version } = opts.preloaded ?? (await loadRoom(ctx, code));
   const result = resultFor(viewFor(state, playerId, version), lead);
   // The viewer's own seat key rides along so the app (and a token-less chat)
   // can act without a separate join. Same trust domain as the projection.
@@ -212,11 +214,14 @@ async function identityFor(ctx: ToolCtx, tokenFromArgs: string | undefined, code
   return identity(ctx, tokenFromArgs, code);
 }
 
-/** Like identityFor but tolerant: null viewer for read-only tools. */
-async function viewerOrNull(ctx: ToolCtx, tokenFromArgs: string | undefined, code: string): Promise<string | null> {
+/**
+ * Resolve the viewer from an ALREADY-LOADED state (no store read) — tolerant:
+ * null viewer for read-only tools. Read-only tools load the room once and pass
+ * that state here, avoiding a second full-room read on the hottest paths.
+ */
+function viewerFromState(ctx: ToolCtx, tokenFromArgs: string | undefined, code: string, state: RoomState): string | null {
   if (ctx.oidc) {
-    const stored = await ctx.store.load(code);
-    const seat = stored ? Object.values(stored.state.players).find((p) => p.subject === ctx.oidc!.subject) : undefined;
+    const seat = Object.values(state.players).find((p) => p.subject === ctx.oidc!.subject);
     if (seat) return seat.id;
   }
   const id = resolveIdentity(ctx.bearer, tokenFromArgs);
@@ -437,7 +442,9 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
     async ({ room, player_token }) => {
       try {
         const code = normalizeRoomCode(room);
-        return await project(ctx, code, await viewerOrNull(ctx, player_token, code));
+        const stored = await loadRoom(ctx, code);
+        const viewer = viewerFromState(ctx, player_token, code, stored.state);
+        return await project(ctx, code, viewer, undefined, { preloaded: stored });
       } catch (err) {
         return errorResult(err);
       }
@@ -469,8 +476,8 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
           };
         }
         const code = normalizeRoomCode(room);
-        const viewer = await viewerOrNull(ctx, player_token, code);
         const { state, version } = await loadRoom(ctx, code);
+        const viewer = viewerFromState(ctx, player_token, code, state);
         const projection = viewFor(state, viewer, version);
         return {
           content: [{ type: 'text', text: `${RULES_TEXT}\n\nYour current situation: ${projection.next_step_hint}` }],
@@ -669,7 +676,12 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
                 properties: { confirm: { type: 'boolean', title: 'Close the vote', default: true } },
                 required: ['confirm'],
               },
-              timeoutMs: 60_000,
+              // Must settle before the app's 15s call timeout (main.ts
+              // CALL_TIMEOUT_MS), or an app-originated close of a tie/empty
+              // vote would show a false error while the server still succeeds.
+              // The app already shows its own confirm sheet, so a short server
+              // window here only matters for the chat path.
+              timeoutMs: 12_000,
             });
             if (outcome.kind === 'declined' || (outcome.kind === 'accept' && outcome.content['confirm'] === false)) {
               return await project(ctx, code, id.playerId, 'The vote stays open.');

@@ -10,7 +10,7 @@ import {
   type CoreDoc,
   type PlayerDoc,
 } from './docs.js';
-import type { MutateCtx, MutateResult, MutateScope, RoomStore, StoredRoom } from './types.js';
+import { phaseKey, type MutateCtx, type MutateResult, type MutateScope, type RoomStore, type StoredRoom } from './types.js';
 
 /**
  * Firestore (Native mode) store.
@@ -57,20 +57,28 @@ export class FirestoreRoomStore implements RoomStore {
 
   async load(code: string): Promise<StoredRoom | null> {
     const ref = this.roomRef(code);
-    const [coreSnap, playerSnaps, actionSnaps] = await Promise.all([
-      ref.get(),
-      ref.collection('players').get(),
-      ref.collection('actions').get(),
-    ]);
+    // Read core + players first; only read the actions subcollection in phases
+    // that actually surface actions (NIGHT, DAY_VOTE). In LOBBY/DAWN/discussion/
+    // DUSK/ENDED assembleState would discard every action doc anyway, so those
+    // up-to-80 reads are pure waste on every load (get_state, projector poll…).
+    const [coreSnap, playerSnaps] = await Promise.all([ref.get(), ref.collection('players').get()]);
     if (!coreSnap.exists) return null;
+    const core = stripMeta(coreSnap.data()) as CoreDoc;
+
     let version = micros(coreSnap.updateTime);
-    for (const snap of [...playerSnaps.docs, ...actionSnaps.docs]) {
-      version = Math.max(version, micros(snap.updateTime));
+    for (const snap of playerSnaps.docs) version = Math.max(version, micros(snap.updateTime));
+
+    let actionDocs: ReturnType<typeof actionFromSnap>[] = [];
+    if (phaseKey(core) !== null) {
+      const actionSnaps = await ref.collection('actions').get();
+      actionDocs = actionSnaps.docs.map((d) => actionFromSnap(d));
+      for (const snap of actionSnaps.docs) version = Math.max(version, micros(snap.updateTime));
     }
+
     const state = assembleState(
-      stripMeta(coreSnap.data()) as CoreDoc,
+      core,
       playerSnaps.docs.map((d) => stripMeta(d.data()) as PlayerDoc),
-      actionSnaps.docs.map((d) => actionFromSnap(d)),
+      actionDocs,
     );
     return { state, version };
   }

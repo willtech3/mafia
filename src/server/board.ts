@@ -11,8 +11,8 @@ import { normalizeRoomCode } from './identity.js';
  * players, this shared screen is the anchor that keeps the room in sync.
  */
 
-const POLL_MS = 2000;
-const MAX_STREAM_MS = 6 * 60 * 60 * 1000;
+const POLL_MS = 4000;
+const MAX_STREAM_MS = 90 * 60 * 1000;
 
 export function registerBoardRoutes(app: Hono, store: RoomStore): void {
   app.get('/room/:code/board', (c) => {
