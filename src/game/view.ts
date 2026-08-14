@@ -1,6 +1,7 @@
 import {
   alivePlayers,
   killsPerNight,
+  MAX_PLAYERS,
   seatedPlayers,
   type DeathCause,
   type Faction,
@@ -291,8 +292,20 @@ function nextStepHint(state: RoomState, viewer: Player | null): string {
   }
 
   if (viewer.spectator) {
-    return state.phase === 'ENDED'
-      ? 'Game over. When the moderator resets the room you will be dealt into the next game.'
+    const seated = Object.values(state.players).filter((p) => !p.spectator).length;
+    const roomFull = seated >= MAX_PLAYERS;
+    if (state.phase === 'LOBBY') {
+      return roomFull
+        ? 'This lobby is full (80 already seated), so you are watching. You get a seat on reset only if fewer than 80 people remain, or if the moderator removes someone and you rejoin.'
+        : 'You are watching from the lobby. You will be dealt in when the room resets if a seat is free.';
+    }
+    if (state.phase === 'ENDED') {
+      return roomFull
+        ? 'Game over. The room is still full, so a reset will keep you watching unless someone leaves.'
+        : 'Game over. When the moderator resets the room you will be dealt into the next game.';
+    }
+    return roomFull
+      ? 'You are watching this game as a spectator. The room is full, so a reset will not automatically seat you.'
       : 'You are watching this game as a spectator. You will be dealt in when the room resets for a new game.';
   }
 

@@ -342,13 +342,18 @@ function moderatorAction(p: Projection): ModAction | null {
   if (!p.you?.isModerator) return null;
   switch (p.phase) {
     case 'LOBBY': {
-      const enough = p.lobbyCount >= 5;
+      const tooMany = p.lobbyCount > 80;
+      const enough = p.lobbyCount >= 5 && !tooMany;
       return {
         label: '🎬 Start the game',
         detail: `Deal secret roles to ${p.lobbyCount} players and begin Night 1.`,
         tool: 'start_game',
         disabled: !enough,
-        note: enough ? `${p.lobbyCount} players ready` : `${p.lobbyCount}/5 players — need at least 5`,
+        note: tooMany
+          ? `${p.lobbyCount} seated — rooms hold 80. Remove extras before starting.`
+          : enough
+            ? `${p.lobbyCount} players ready`
+            : `${p.lobbyCount}/5 players — need at least 5`,
       };
     }
     case 'NIGHT':
@@ -561,15 +566,20 @@ function renderPrivatePanels(p: Projection): void {
 }
 
 function renderLobby(p: Projection): void {
+  const watching =
+    p.spectatorCount > 0 ? ` ${p.spectatorCount} watching${p.lobbyCount >= 80 ? ' (lobby full)' : ''}.` : '';
+  const status = p.you?.spectator
+    ? 'The lobby is full — you are watching this round.'
+    : p.you?.isModerator
+      ? 'Share the room code out loud — start when everyone is in.'
+      : 'Wait for the moderator to start the game.';
   root.append(
     h(
       'div',
       { class: 'empty' },
-      `🏮 ${p.lobbyCount} villager${p.lobbyCount === 1 ? '' : 's'} gathered by lantern light.`,
+      `🏮 ${p.lobbyCount} villager${p.lobbyCount === 1 ? '' : 's'} gathered by lantern light.${watching}`,
       h('br'),
-      p.you?.isModerator
-        ? 'Share the room code out loud — start when everyone is in.'
-        : 'Wait for the moderator to start the game.',
+      status,
     ),
   );
   renderGrid(p, { headline: 'In the lobby' });
