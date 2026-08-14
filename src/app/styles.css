@@ -242,6 +242,10 @@ body {
 .tile.tappable { cursor: pointer; }
 .tile.tappable:hover { border-color: rgba(245, 168, 60, 0.5); background: var(--panel-2); }
 .tile.tappable:active { transform: scale(0.96); }
+/* Moderator lobby management reads as removal, not targeting: blood, not lantern. */
+.tile.kickable { cursor: pointer; }
+.tile.kickable:hover { border-color: rgba(224, 82, 82, 0.5); background: var(--panel-2); }
+.tile.kickable:active { transform: scale(0.96); }
 .tile.me { border-color: rgba(147, 174, 222, 0.5); }
 .tile.dead { opacity: 0.55; filter: saturate(0.35); }
 .tile.picked { border-color: var(--lantern); background: var(--lantern-soft); box-shadow: 0 0 0 1px var(--lantern) inset; }
@@ -293,6 +297,15 @@ body {
 .badge.zero { display: none; }
 .crown { position: absolute; top: -8px; left: -4px; font-size: 14px; transform: rotate(-18deg); }
 .mark { position: absolute; bottom: 28px; right: 8px; font-size: 14px; }
+
+.nomatch {
+  text-align: center;
+  color: var(--faint);
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 13.5px;
+  padding: 18px 8px;
+}
 
 .fallen { margin-top: 12px; }
 .fallen summary {

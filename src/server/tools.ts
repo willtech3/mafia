@@ -671,7 +671,7 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
               store,
               message:
                 tally.length === 0
-                  ? 'No votes have been cast — closing now banishes no one. Close the vote anyway?'
+                  ? `${(view.vote?.votesCast ?? 0) > 0 ? 'Every vote so far is an abstain' : 'No votes have been cast'} — closing now banishes no one. Close the vote anyway?`
                   : `The vote is tied (${tally[0]!.targetName} and ${tally[1]!.targetName}) — closing now banishes no one. Close the vote anyway?`,
               requestedSchema: {
                 type: 'object',

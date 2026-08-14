@@ -167,10 +167,16 @@ footer .spacer { flex: 1; }
 
 .splash {
   position: fixed; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column;
-  gap: 2vh; z-index: 20; backdrop-filter: blur(3px); text-align: center;
+  gap: 2vh; z-index: 20; backdrop-filter: blur(3px); text-align: center; pointer-events: none;
 }
-.splash.show { display: flex; animation: splashin .8s cubic-bezier(.2,.9,.3,1); }
+/* Play the moment, then fade away so the unmasked wall (everyone's true
+   role) gets the projector — that reveal is the room's favorite part. */
+.splash.show {
+  display: flex;
+  animation: splashin .8s cubic-bezier(.2,.9,.3,1), splashfade 1.8s ease 7s forwards;
+}
 @keyframes splashin { from { opacity: 0; transform: scale(.94); } }
+@keyframes splashfade { to { opacity: 0; visibility: hidden; } }
 .splash.town { background: radial-gradient(60vw 60vh at 50% 45%, rgba(245,168,60,.28), rgba(14,11,26,.94) 70%); }
 .splash.mafia { background: radial-gradient(60vw 60vh at 50% 45%, rgba(224,82,82,.30), rgba(14,11,26,.95) 70%); }
 .splash .icon { font-size: clamp(60px, 14vh, 150px); filter: drop-shadow(0 0 40px rgba(245,168,60,.5)); }
@@ -220,7 +226,14 @@ const $ = (id) => document.getElementById(id);
 let prevVotes = {};
 
 function hue(name) { let h = 5381; for (let i = 0; i < name.length; i++) h = ((h << 5) + h + name.charCodeAt(i)) | 0; return ((h % 360) + 360) % 360; }
-function initials(name) { const p = name.trim().split(/\\s+/); return (p.length > 1 ? p[0][0] + p[p.length - 1][0] : name.slice(0, 2)).toUpperCase(); }
+function initials(name) {
+  // Iterate by code point, not UTF-16 unit, so an emoji-first name shows a
+  // whole glyph on the projector instead of a broken surrogate half.
+  const first = (s) => [...s][0] ?? '';
+  const p = name.trim().split(/\\s+/);
+  const two = p.length > 1 ? first(p[0]) + first(p[p.length - 1]) : [...name].slice(0, 2).join('');
+  return two.toUpperCase();
+}
 
 /** Shrink --tile until n tiles fit the wall, so 80 names stay on a 720p projector. */
 function fitTileMin(n) {
@@ -240,6 +253,7 @@ function fitTileMin(n) {
 }
 
 let lastState = null;
+let splashShown = false;
 function render(p) {
   lastState = p;
   const [icon, label, day] = PHASE[p.phase] ?? ['?', p.phase, false];
@@ -308,14 +322,19 @@ function render(p) {
     }
   }
 
-  // victory splash
+  // victory splash — set the class only on the transition into ENDED, so
+  // later renders (resize, lobby joins) don't restart the fade animation
   const splash = $('splash');
   if (p.phase === 'ENDED' && p.winner) {
-    splash.className = 'splash show ' + (p.winner === 'MAFIA' ? 'mafia' : 'town');
-    $('sIcon').textContent = p.winner === 'MAFIA' ? '🔪' : '🌾';
-    $('sTitle').textContent = p.winner === 'MAFIA' ? 'The Mafia win' : 'The Town wins';
-    $('sSub').textContent = p.round + ' rounds of paranoia · ' + p.aliveCount + ' of ' + p.seatedCount + ' still standing';
+    if (!splashShown) {
+      splashShown = true;
+      splash.className = 'splash show ' + (p.winner === 'MAFIA' ? 'mafia' : 'town');
+      $('sIcon').textContent = p.winner === 'MAFIA' ? '🔪' : '🌾';
+      $('sTitle').textContent = p.winner === 'MAFIA' ? 'The Mafia win' : 'The Town wins';
+      $('sSub').textContent = p.round + ' rounds of paranoia · ' + p.aliveCount + ' of ' + p.seatedCount + ' still standing';
+    }
   } else {
+    splashShown = false;
     splash.className = 'splash';
   }
   $('status').textContent = 'live';
