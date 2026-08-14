@@ -76,9 +76,9 @@ resource "google_cloud_run_v2_service" "mafia" {
     service_account = google_service_account.runtime.email
 
     scaling {
-      # min 2: the kill-an-instance demo must be real, and cold starts on
-      # stage are unacceptable.
-      min_instance_count = 2
+      # Scale to zero when idle so staging does not bill 2 warm instances 24/7.
+      # Bump back to 2 before a live drill or show if cold starts matter.
+      min_instance_count = 0
       max_instance_count = 10
     }
 
