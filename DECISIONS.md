@@ -151,7 +151,7 @@ Updated through Milestone 1 (2026-08-09).
     the Terraform stack re-points with one variable.
 
 22. **`min-instances=2`** as specified (kill-drill realism + no cold starts).
-    Note: this bills ~2 idle instances 24/7 until torn down.
+    Note: this billed ~2 idle instances 24/7. Superseded by #53.
 
 23. **Room lifecycle:** rooms carry `expiresAt` (+48h, refreshed on write);
     Firestore TTL policies (Terraform-managed) garbage-collect stale rooms.
@@ -373,6 +373,10 @@ Updated through Milestone 1 (2026-08-09).
     1–2 finished from a fresh `/tmp/mafia-work` clone, pushing to the same
     remote (CI deploys). If the Desktop folder is still wedged later, re-clone
     or reboot — the repo itself is intact.
+
+53. **Scale to zero off-demo.** Staging uses `min_instance_count = 0` so idle
+    Cloud Run instances do not bill 24/7. Cold starts are acceptable until the
+    next live drill; bump min back to 2 for a show.
 
 ## Testing notes
 
