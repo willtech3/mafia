@@ -537,10 +537,16 @@ function applyKick(state: RoomState, event: { byPlayerId: string; targetId: stri
 function applyReset(state: RoomState, event: { byPlayerId: string; seed: string }): RoomState {
   requireModerator(state, event.byPlayerId, 'reset the room');
   const next = clone(state);
-  for (const p of Object.values(next.players)) {
+  // Deal spectators in, but never above MAX_PLAYERS — otherwise start_game
+  // refuses and the encore (the reason we reset) cannot begin. Earliest
+  // joiners keep seats; overflow stays watching.
+  const ordered = Object.values(next.players).sort((a, b) => a.joinedSeq - b.joinedSeq);
+  let seated = 0;
+  for (const p of ordered) {
     p.role = null;
     p.alive = true;
-    p.spectator = false;
+    p.spectator = seated >= MAX_PLAYERS;
+    if (!p.spectator) seated += 1;
   }
   next.phase = 'LOBBY';
   next.round = 0;

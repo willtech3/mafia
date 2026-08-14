@@ -200,6 +200,27 @@ describe('MCP App wiring', () => {
   });
 });
 
+describe('projector board', () => {
+  it('a missing room emits gone; the page script closes the EventSource so onerror cannot clobber it', async () => {
+    const store = new MemoryRoomStore();
+    const { server, url } = await listen(createApp(store));
+    const origin = url.replace(/\/mcp$/, '');
+    const html = await (await fetch(`${origin}/room/NOPE/board`)).text();
+    expect(html).toContain("src.close()");
+    expect(html).toContain("if (gone) return");
+    expect(html).toContain('room not found');
+
+    const events = await fetch(`${origin}/room/NOPE/board/events`, {
+      headers: { accept: 'text/event-stream' },
+    });
+    expect(events.ok).toBe(true);
+    const body = await events.text();
+    expect(body).toMatch(/event:\s*gone/);
+
+    server.close();
+  }, 15_000);
+});
+
 describe('projection payload stays lean over the wire', () => {
   it('an 80-player room projection fits comfortably', async () => {
     const store = new MemoryRoomStore();

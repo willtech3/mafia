@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { apply } from '../src/game/reducer.js';
 import type { Role, RoomState } from '../src/game/types.js';
 import { viewFor, type Projection } from '../src/game/view.js';
-import { advance, byRole, living, makeGame, nextSeq, nightAction, quietNightToVote, vote } from './helpers.js';
+import { advance, byRole, living, makeGame, makeLobby, nextSeq, nightAction, quietNightToVote, vote } from './helpers.js';
 
 /**
  * Redaction is the game's security model: anything in a projection is visible
@@ -173,6 +173,16 @@ describe('death, spectators, and game end', () => {
     const roles = visibleRoleAssignments(p);
     expect(roles.size).toBe(0);
     expect(p.you?.spectator).toBe(true);
+  });
+
+  it('a lobby-overflow spectator is told the room is full, not that reset will seat them', () => {
+    let s = makeLobby(80);
+    s = apply(s, { type: 'JOIN', playerId: 'p81', name: 'Overflow', seq: nextSeq() });
+    const p = viewFor(s, 'p81', 1);
+    expect(p.you?.spectator).toBe(true);
+    expect(p.players.some((t) => t.id === 'p81')).toBe(false);
+    expect(p.next_step_hint.toLowerCase()).toContain('full');
+    expect(p.next_step_hint.toLowerCase()).not.toContain('you will be dealt in when the room resets');
   });
 
   it('at ENDED everyone sees the full reveal', () => {

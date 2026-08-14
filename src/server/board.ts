@@ -110,7 +110,7 @@ main { flex: 1; display: grid; grid-template-columns: 1fr minmax(320px, 28vw); g
 
 .wall { overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
 .wallgrid { flex: 1; display: grid; gap: .8vh; align-content: start; padding-top: 1.6vh;
-  grid-template-columns: repeat(auto-fill, minmax(var(--tile, 120px), 1fr)); overflow: hidden; }
+  grid-template-columns: repeat(auto-fill, minmax(var(--tile, 120px), 1fr)); overflow-x: hidden; overflow-y: auto; }
 .tile {
   border: 1px solid var(--line); border-radius: 12px; background: var(--panel);
   display: flex; flex-direction: column; align-items: center; gap: .6vh;
@@ -222,17 +222,36 @@ let prevVotes = {};
 function hue(name) { let h = 5381; for (let i = 0; i < name.length; i++) h = ((h << 5) + h + name.charCodeAt(i)) | 0; return ((h % 360) + 360) % 360; }
 function initials(name) { const p = name.trim().split(/\\s+/); return (p.length > 1 ? p[0][0] + p[p.length - 1][0] : name.slice(0, 2)).toUpperCase(); }
 
+/** Shrink --tile until n tiles fit the wall, so 80 names stay on a 720p projector. */
+function fitTileMin(n) {
+  const grid = $('grid');
+  const w = Math.max(1, grid.clientWidth);
+  const h = Math.max(1, grid.clientHeight);
+  const gap = Math.max(6, Math.round(h * 0.008));
+  let minW = n > 60 ? 96 : n > 40 ? 110 : n > 20 ? 128 : 150;
+  const tileH = () => minW * 0.55 + 36;
+  while (minW > 56) {
+    const cols = Math.max(1, Math.floor((w + gap) / (minW + gap)));
+    const rows = Math.ceil(n / cols);
+    if (rows * (tileH() + gap) <= h + 2) break;
+    minW -= 4;
+  }
+  return Math.max(56, minW) + 'px';
+}
+
+let lastState = null;
 function render(p) {
+  lastState = p;
   const [icon, label, day] = PHASE[p.phase] ?? ['?', p.phase, false];
   $('phase').textContent = icon + '  ' + (p.phase === 'NIGHT' || p.phase === 'DAWN' || p.phase === 'DUSK' ? label + ' ' + p.round : label);
   $('phase').classList.toggle('day', !!day);
-  $('alive').textContent = p.phase === 'LOBBY' ? p.lobbyCount + ' in the lobby' : p.aliveCount + ' of ' + p.seatedCount + ' alive · round ' + p.round;
+  const watch = p.spectatorCount > 0 ? ' · ' + p.spectatorCount + ' watching' : '';
+  $('alive').textContent = p.phase === 'LOBBY' ? p.lobbyCount + ' in the lobby' + watch : p.aliveCount + ' of ' + p.seatedCount + ' alive · round ' + p.round;
 
-  // tiles — size adapts to player count
+  // tiles — size adapts to player count AND the visible wall
   const n = p.players.length || 1;
-  const tile = n > 60 ? '96px' : n > 40 ? '110px' : n > 20 ? '128px' : '150px';
   const grid = $('grid');
-  grid.style.setProperty('--tile', tile);
+  grid.style.setProperty('--tile', fitTileMin(n));
   grid.textContent = '';
   const reveal = {};
   (p.reveal?.players ?? []).forEach((r) => (reveal[r.id] = r.role));
@@ -268,7 +287,9 @@ function render(p) {
 
   // lobby join card
   $('join').style.display = p.phase === 'LOBBY' ? '' : 'none';
-  if (p.phase === 'LOBBY') $('joinCount').textContent = p.lobbyCount + ' villagers seated';
+  if (p.phase === 'LOBBY') {
+    $('joinCount').textContent = p.lobbyCount + ' villagers seated' + (p.spectatorCount > 0 ? ' · ' + p.spectatorCount + ' watching' : '');
+  }
 
   // vote tally bars
   const tallyOn = p.phase === 'DAY_VOTE' && p.vote && p.vote.tally.length > 0;
@@ -300,11 +321,24 @@ function render(p) {
   $('status').textContent = 'live';
 }
 
+window.addEventListener('resize', () => { if (lastState) render(lastState); });
+
+let gone = false;
 const src = new EventSource(location.pathname + '/events');
 src.addEventListener('state', (ev) => { $('dot').classList.add('ok'); render(JSON.parse(ev.data)); });
 src.addEventListener('beat', () => $('dot').classList.add('ok'));
-src.addEventListener('gone', () => { $('status').textContent = 'room not found'; $('dot').classList.remove('ok'); });
-src.onerror = () => { $('dot').classList.remove('ok'); $('status').textContent = 'reconnecting…'; };
+src.addEventListener('gone', () => {
+  gone = true;
+  src.close();
+  $('status').textContent = 'room not found';
+  $('phase').textContent = 'room not found';
+  $('dot').classList.remove('ok');
+});
+src.onerror = () => {
+  if (gone) return;
+  $('dot').classList.remove('ok');
+  $('status').textContent = 'reconnecting…';
+};
 </script>
 </body>
 </html>`;
