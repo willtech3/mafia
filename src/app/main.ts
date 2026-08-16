@@ -104,8 +104,25 @@ let cardFlipped = false;
 let narrationOpen = false;
 let fallenOpen: boolean | null = null; // null = default (open when few dead / reveal)
 let sheet:
-  | { title: string; detail: string; confirmLabel: string; danger?: boolean; phaseAt: string; action: () => Promise<void> }
+  | {
+      title: string;
+      detail: string;
+      confirmLabel: string;
+      danger?: boolean;
+      phaseAt: string;
+      /** Keep autopolling and refresh this copy from the live projection. */
+      live?: boolean;
+      action: () => Promise<void>;
+    }
   | null = null;
+let sheetNeedsFocus = false;
+let sheetConfirming = false;
+
+function openSheet(next: NonNullable<typeof sheet>): void {
+  sheet = next;
+  sheetNeedsFocus = true;
+  render();
+}
 
 const root = document.getElementById('app')!;
 
@@ -138,7 +155,11 @@ function setProjection(next: Projection, force = false): void {
     if (next.stateVersion < prev.stateVersion) return;
     // Nothing changed on the server: keep the DOM (and the player's focus,
     // selection, and scroll) exactly as it is.
-    if (next.stateVersion === prev.stateVersion && prev.phase === next.phase) {
+    if (
+      next.stateVersion === prev.stateVersion &&
+      prev.phase === next.phase &&
+      (prev.you?.id ?? null) === (next.you?.id ?? null)
+    ) {
       proj = next;
       if (next.player_token) playerToken = next.player_token;
       return;
@@ -208,26 +229,29 @@ function refresh(): void {
  * setProjection, so an unchanged room costs zero DOM churn and a stale read
  * can't clobber a newer projection.
  */
-let pollInFlight = false;
+let pollInFlight: Promise<void> | null = null;
 async function backgroundRefresh(): Promise<void> {
-  if (!room || busy || pollInFlight) return;
-  pollInFlight = true;
-  try {
-    const args: Record<string, unknown> = { room };
-    if (playerToken) args['player_token'] = playerToken;
-    const result = (await Promise.race([
-      app.callServerTool({ name: 'get_state', arguments: args }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), CALL_TIMEOUT_MS)),
-    ])) as { isError?: boolean; structuredContent?: unknown };
-    if (!result.isError) {
-      const sc = result.structuredContent as Projection | undefined;
-      if (sc && typeof sc === 'object' && 'room' in sc && 'phase' in sc) setProjection(sc);
+  if (!room || busy) return;
+  if (pollInFlight) return pollInFlight;
+  pollInFlight = (async () => {
+    try {
+      const args: Record<string, unknown> = { room };
+      if (playerToken) args['player_token'] = playerToken;
+      const result = (await Promise.race([
+        app.callServerTool({ name: 'get_state', arguments: args }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), CALL_TIMEOUT_MS)),
+      ])) as { isError?: boolean; structuredContent?: unknown };
+      if (!result.isError) {
+        const sc = result.structuredContent as Projection | undefined;
+        if (sc && typeof sc === 'object' && 'room' in sc && 'phase' in sc) setProjection(sc);
+      }
+    } catch {
+      // Background polls fail silently; the next tick retries.
+    } finally {
+      pollInFlight = null;
     }
-  } catch {
-    // Background polls fail silently; the next tick retries.
-  } finally {
-    pollInFlight = false;
-  }
+  })();
+  return pollInFlight;
 }
 
 function setAutoPoll(on: boolean): void {
@@ -238,10 +262,11 @@ function setAutoPoll(on: boolean): void {
   }
   if (on) {
     autoPollTimer = window.setInterval(() => {
-      // Don't poll while a sheet is open or the player is typing in the filter —
-      // a re-render would blow away the sheet / the input focus.
+      // Don't poll while a frozen sheet is open or the player is typing —
+      // a re-render would steal focus. Live sheets (close-vote) *want* polls
+      // so the warning tracks the current tally.
       const typing = document.activeElement?.classList.contains('filter');
-      if (!sheet && !typing && document.visibilityState === 'visible') void backgroundRefresh();
+      if ((!sheet || sheet.live) && !typing && document.visibilityState === 'visible') void backgroundRefresh();
     }, 10_000);
   }
   render();
@@ -301,14 +326,25 @@ function avatarFor(name: string, dead = false): HTMLElement {
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/);
-  // Iterate by code point, not UTF-16 unit, so an emoji-first name
-  // ("🎃 Pumpkin King") yields a whole glyph, not a broken surrogate half.
-  const first = (s: string) => [...s][0] ?? '';
+  // Grapheme clusters, not UTF-16 units or lone code points: "🎃 Pumpkin",
+  // "👍🏽 Sam", and "👨‍👩‍👧‍👦 Lee" each keep a whole first character.
   const chars =
     parts.length >= 2
-      ? first(parts[0]!) + first(parts[parts.length - 1]!)
-      : [...name].slice(0, 2).join('');
+      ? graphemes(parts[0]!, 1) + graphemes(parts[parts.length - 1]!, 1)
+      : graphemes(name, 2);
   return chars.toUpperCase();
+}
+
+function graphemes(s: string, n: number): string {
+  if (typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
+    const out: string[] = [];
+    for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s)) {
+      out.push(segment);
+      if (out.length >= n) break;
+    }
+    return out.join('');
+  }
+  return [...s].slice(0, n).join('');
 }
 
 // ---------------------------------------------------------------------------
@@ -335,13 +371,13 @@ function canTarget(p: Projection, tile: Tile, mode: TargetMode): boolean {
 
 function pickTarget(p: Projection, tile: Tile, mode: NonNullable<TargetMode>): void {
   if (mode.kind === 'vote') {
-    sheet = {
+    openSheet({
       title: `Vote to banish ${tile.name}?`,
       detail: 'You can change your vote until the moderator closes it.',
       confirmLabel: '🗳️ Cast vote',
       phaseAt: p.phase,
       action: () => call('cast_vote', { target_player_id: tile.id }, `Your vote: ${tile.name}`),
-    };
+    });
   } else {
     const copy: Record<string, [string, string, string]> = {
       MAFIA: [`Mark ${tile.name} for tonight?`, 'The family votes; the most-marked fall at dawn.', '🔪 Mark them'],
@@ -349,15 +385,14 @@ function pickTarget(p: Projection, tile: Tile, mode: NonNullable<TargetMode>): v
       DETECTIVE: [`Investigate ${tile.name}?`, 'The truth arrives with the dawn — for your eyes only.', '🔍 Investigate'],
     };
     const [title, detail, confirmLabel] = copy[mode.role]!;
-    sheet = {
+    openSheet({
       title,
       detail,
       confirmLabel,
       phaseAt: p.phase,
       action: () => call('submit_night_action', { target_player_id: tile.id }, 'Locked in — you can still change it before dawn.'),
-    };
+    });
   }
-  render();
 }
 
 interface ModAction {
@@ -367,6 +402,26 @@ interface ModAction {
   danger?: boolean;
   disabled?: boolean;
   note?: string;
+}
+
+function formatNameList(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? '';
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
+}
+
+/** Live copy for the close-vote sheet — recomputed from the current projection. */
+function closeVoteDetail(p: Projection): string {
+  const tally = p.vote?.tally ?? [];
+  const top = tally[0]?.count;
+  const leaders = top === undefined ? [] : tally.filter((t) => t.count === top).map((t) => t.targetName);
+  if (tally.length === 0) {
+    return `${(p.vote?.votesCast ?? 0) > 0 ? 'Every vote so far is an abstain' : 'No votes have been cast'} — closing now banishes no one. This cannot be undone.`;
+  }
+  if (leaders.length >= 2) {
+    return `The vote is tied (${formatNameList(leaders)}) — closing now banishes no one. This cannot be undone.`;
+  }
+  return 'Count the hands and banish the chosen. This cannot be undone.';
 }
 
 function moderatorAction(p: Projection): ModAction | null {
@@ -393,20 +448,8 @@ function moderatorAction(p: Projection): ModAction | null {
       return { label: '🏘️ Open discussion', detail: 'Let the accusations begin.', tool: 'advance_phase' };
     case 'DAY_DISCUSSION':
       return { label: '🗳️ Open the vote', detail: 'Time to point fingers for real.', tool: 'advance_phase' };
-    case 'DAY_VOTE': {
-      // Mirror the server's tie/no-votes elicitation guard (which the app's
-      // tool-call path can't receive) so the moderator isn't surprised when
-      // closing banishes nobody.
-      const tally = p.vote?.tally ?? [];
-      const tie = tally.length >= 2 && tally[0]!.count === tally[1]!.count;
-      const detail =
-        tally.length === 0
-          ? `${(p.vote?.votesCast ?? 0) > 0 ? 'Every vote so far is an abstain' : 'No votes have been cast'} — closing now banishes no one. This cannot be undone.`
-          : tie
-            ? `The vote is tied (${tally[0]!.targetName} and ${tally[1]!.targetName}) — closing now banishes no one. This cannot be undone.`
-            : 'Count the hands and banish the chosen. This cannot be undone.';
-      return { label: '🔒 Close the vote', detail, tool: 'advance_phase', danger: true };
-    }
+    case 'DAY_VOTE':
+      return { label: '🔒 Close the vote', detail: closeVoteDetail(p), tool: 'advance_phase', danger: true };
     case 'DUSK':
       return { label: '🌙 Night falls', detail: 'Send the village back to sleep… some for the last time.', tool: 'advance_phase', danger: true };
     case 'ENDED':
@@ -423,6 +466,8 @@ function render(): void {
   const active = document.activeElement;
   const refocusFilter = active instanceof HTMLInputElement && active.classList.contains('filter');
   const caret = refocusFilter ? active.selectionStart : null;
+  const sheetBtnLabel =
+    active instanceof HTMLButtonElement && active.closest('.sheet') ? active.textContent : null;
 
   root.textContent = '';
   const day = proj && PHASE_META[proj.phase]?.day && proj.phase !== 'ENDED';
@@ -453,7 +498,7 @@ function render(): void {
   renderModBar(p);
 
   if (roleCardOpen && p.you?.role && p.phase !== 'LOBBY' && p.phase !== 'ENDED') renderRoleCard(p);
-  if (sheet) renderSheet();
+  if (sheet) renderSheet(sheetBtnLabel);
   if (busy) root.append(h('div', { class: 'busyveil' }));
 
   if (refocusFilter) {
@@ -549,14 +594,13 @@ function renderPrompt(p: Projection): void {
   if (mode?.kind === 'vote') {
     const abstain = h('button', { class: 'iconbtn' }, '🤷 Abstain');
     abstain.onclick = () => {
-      sheet = {
+      openSheet({
         title: 'Abstain from this vote?',
         detail: 'Sometimes silence is a strategy too.',
         confirmLabel: '🤷 Abstain',
         phaseAt: p.phase,
         action: () => call('cast_vote', { target_player_id: 'abstain' }, 'You are abstaining.'),
-      };
-      render();
+      });
     };
     row.append(abstain);
   }
@@ -694,12 +738,16 @@ function renderGrid(p: Projection, opts: GridOpts): void {
 
   if (query !== '' && aliveShown.length === 0 && deadShown.length === 0) {
     wrap.append(h('div', { class: 'nomatch' }, `🔎 No villager matches “${filterText.trim()}”.`));
+  } else if (query !== '' && aliveShown.length === 0 && deadShown.length > 0) {
+    wrap.append(h('div', { class: 'nomatch' }, `🔎 No living villager matches “${filterText.trim()}” — check the fallen.`));
   }
 
   if (dead.length > 0) {
     // Remember the player's expand/collapse choice across re-renders (autopoll
-    // otherwise snaps the list shut under their finger every 10s).
-    const open = fallenOpen ?? (opts.reveal || dead.length <= 6);
+    // otherwise snaps the list shut under their finger every 10s). Auto-open
+    // when the only matches are among the fallen, so a search isn't a blank grid.
+    const onlyFallenMatch = query !== '' && aliveShown.length === 0 && deadShown.length > 0;
+    const open = fallenOpen ?? (opts.reveal || dead.length <= 6 || onlyFallenMatch);
     const fallen = h('details', { class: 'fallen', open }, h('summary', {}, `🪦 The fallen (${dead.length})`));
     (fallen as HTMLDetailsElement).ontoggle = () => {
       fallenOpen = (fallen as HTMLDetailsElement).open;
@@ -758,15 +806,14 @@ function renderTile(p: Projection, tile: Tile, mode: TargetMode, revealRoles: Ma
     };
   } else if (kickable) {
     const go = () => {
-      sheet = {
+      openSheet({
         title: `Remove ${tile.name} from the lobby?`,
         detail: 'They can rejoin with the room code at any time.',
         confirmLabel: '🚪 Remove',
         danger: true,
         phaseAt: p.phase,
         action: () => call('kick_player', { player_id: tile.id }, `${tile.name} was removed.`),
-      };
-      render();
+      });
     };
     el.onclick = go;
     el.onkeydown = (ev) => {
@@ -785,15 +832,15 @@ function renderModBar(p: Projection): void {
   if (action) {
     bar.append(
       btn(action.label, action.danger ? 'danger' : 'primary', () => {
-        sheet = {
+        openSheet({
           title: action.label.replace(/^\S+\s/, ''),
           detail: action.detail,
           confirmLabel: action.label,
           danger: action.danger ?? false,
           phaseAt: p.phase,
+          live: p.phase === 'DAY_VOTE' && action.tool === 'advance_phase',
           action: () => call(action.tool, {}),
-        };
-        render();
+        });
       }, action.disabled),
       h('span', { class: 'note' }, action.note ?? '👑 You are the moderator — you set the pace.'),
     );
@@ -860,9 +907,12 @@ function renderRoleCard(p: Projection): void {
   root.append(wrap);
 }
 
-function renderSheet(): void {
+function renderSheet(prevLabel: string | null = null): void {
   if (!sheet) return;
   const current = sheet;
+  if (current.live && proj && proj.phase === current.phaseAt) {
+    current.detail = closeVoteDetail(proj);
+  }
   const close = () => {
     sheet = null;
     render();
@@ -885,15 +935,47 @@ function renderSheet(): void {
   );
   const btns = h('div', { class: 'btns' });
   const confirmBtn = btn(current.confirmLabel, current.danger ? 'danger' : 'primary', () => {
-    sheet = null;
+    if (sheetConfirming) return;
     // Guard against phase drift: if the world moved on while this sheet was
     // open (moderator advanced via chat, autopoll landed), don't fire a stale
     // action into the wrong phase.
     if (proj && proj.phase !== current.phaseAt) {
+      sheet = null;
       render();
       toast('The game moved on — that action no longer applies.');
       return;
     }
+    // The tally can still move while this sheet is open. Refresh, then
+    // compare against the copy they actually confirmed — not the post-render
+    // string, which a live poll may have already rewritten.
+    if (current.live) {
+      const promised = current.detail;
+      sheetConfirming = true;
+      void (async () => {
+        try {
+          await backgroundRefresh();
+          if (!proj || proj.phase !== current.phaseAt) {
+            sheet = null;
+            render();
+            toast('The game moved on — that action no longer applies.');
+            return;
+          }
+          const fresh = closeVoteDetail(proj);
+          if (fresh !== promised) {
+            current.detail = fresh;
+            render();
+            toast('The tally changed — read the warning before closing.');
+            return;
+          }
+          sheet = null;
+          void current.action();
+        } finally {
+          sheetConfirming = false;
+        }
+      })();
+      return;
+    }
+    sheet = null;
     void current.action();
   });
   btns.append(
@@ -903,5 +985,11 @@ function renderSheet(): void {
   box.append(btns);
   veil.append(box);
   root.append(veil);
-  confirmBtn.focus(); // keyboard/switch users land on the confirm, not 80 tiles away
+  if (sheetNeedsFocus) {
+    confirmBtn.focus(); // first open only — live refreshes must not yank focus off Cancel
+    sheetNeedsFocus = false;
+  } else if (prevLabel) {
+    const again = [...box.querySelectorAll('button')].find((b) => b.textContent === prevLabel);
+    again?.focus();
+  }
 }

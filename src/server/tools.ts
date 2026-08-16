@@ -101,6 +101,18 @@ const tokenArg = z
     'Your player token from create_room/join_room. Pass it on every call so the server knows who you are (not needed if the connection itself is signed in).',
   );
 
+function formatNameList(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? '';
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
+}
+
+function tiedLeaders(tally: { targetName: string; count: number }[]): string[] {
+  const top = tally[0]?.count;
+  if (top === undefined) return [];
+  return tally.filter((t) => t.count === top).map((t) => t.targetName);
+}
+
 function phaseLabel(phase: Phase, round: number): string {
   switch (phase) {
     case 'LOBBY':
@@ -672,7 +684,7 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
               message:
                 tally.length === 0
                   ? `${(view.vote?.votesCast ?? 0) > 0 ? 'Every vote so far is an abstain' : 'No votes have been cast'} — closing now banishes no one. Close the vote anyway?`
-                  : `The vote is tied (${tally[0]!.targetName} and ${tally[1]!.targetName}) — closing now banishes no one. Close the vote anyway?`,
+                  : `The vote is tied (${formatNameList(tiedLeaders(tally))}) — closing now banishes no one. Close the vote anyway?`,
               requestedSchema: {
                 type: 'object',
                 properties: { confirm: { type: 'boolean', title: 'Close the vote', default: true } },

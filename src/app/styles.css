@@ -240,11 +240,13 @@ body {
   min-height: 86px;
 }
 .tile.tappable { cursor: pointer; }
-.tile.tappable:hover { border-color: rgba(245, 168, 60, 0.5); background: var(--panel-2); }
+.tile.tappable:hover,
+.tile.tappable:focus-visible { border-color: rgba(245, 168, 60, 0.5); background: var(--panel-2); }
 .tile.tappable:active { transform: scale(0.96); }
 /* Moderator lobby management reads as removal, not targeting: blood, not lantern. */
 .tile.kickable { cursor: pointer; }
-.tile.kickable:hover { border-color: rgba(224, 82, 82, 0.5); background: var(--panel-2); }
+.tile.kickable:hover,
+.tile.kickable:focus-visible { border-color: rgba(224, 82, 82, 0.5); background: var(--panel-2); }
 .tile.kickable:active { transform: scale(0.96); }
 .tile.me { border-color: rgba(147, 174, 222, 0.5); }
 .tile.dead { opacity: 0.55; filter: saturate(0.35); }
