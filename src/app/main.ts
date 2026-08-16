@@ -229,9 +229,10 @@ function refresh(): void {
  * setProjection, so an unchanged room costs zero DOM churn and a stale read
  * can't clobber a newer projection.
  */
-let pollInFlight: Promise<void> | null = null;
-async function backgroundRefresh(): Promise<void> {
-  if (!room || busy) return;
+let pollInFlight: Promise<boolean> | null = null;
+/** @returns true when a usable projection was applied. Autopoll ignores the flag. */
+async function backgroundRefresh(): Promise<boolean> {
+  if (!room || busy) return false;
   if (pollInFlight) return pollInFlight;
   pollInFlight = (async () => {
     try {
@@ -243,10 +244,15 @@ async function backgroundRefresh(): Promise<void> {
       ])) as { isError?: boolean; structuredContent?: unknown };
       if (!result.isError) {
         const sc = result.structuredContent as Projection | undefined;
-        if (sc && typeof sc === 'object' && 'room' in sc && 'phase' in sc) setProjection(sc);
+        if (sc && typeof sc === 'object' && 'room' in sc && 'phase' in sc) {
+          setProjection(sc);
+          return true;
+        }
       }
+      return false;
     } catch {
       // Background polls fail silently; the next tick retries.
+      return false;
     } finally {
       pollInFlight = null;
     }
@@ -410,18 +416,36 @@ function formatNameList(names: string[]): string {
   return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`;
 }
 
-/** Live copy for the close-vote sheet — recomputed from the current projection. */
-function closeVoteDetail(p: Projection): string {
+/** Live copy + a stable key so Alice→Bob is treated as a different outcome. */
+function closeVoteOutcome(p: Projection): { detail: string; key: string } {
   const tally = p.vote?.tally ?? [];
   const top = tally[0]?.count;
-  const leaders = top === undefined ? [] : tally.filter((t) => t.count === top).map((t) => t.targetName);
+  const leaders = top === undefined ? [] : tally.filter((t) => t.count === top);
   if (tally.length === 0) {
-    return `${(p.vote?.votesCast ?? 0) > 0 ? 'Every vote so far is an abstain' : 'No votes have been cast'} — closing now banishes no one. This cannot be undone.`;
+    const abstain = (p.vote?.votesCast ?? 0) > 0;
+    return {
+      detail: `${abstain ? 'Every vote so far is an abstain' : 'No votes have been cast'} — closing now banishes no one. This cannot be undone.`,
+      key: abstain ? 'abstain' : 'empty',
+    };
   }
   if (leaders.length >= 2) {
-    return `The vote is tied (${formatNameList(leaders)}) — closing now banishes no one. This cannot be undone.`;
+    return {
+      detail: `The vote is tied (${formatNameList(leaders.map((t) => t.targetName))}) — closing now banishes no one. This cannot be undone.`,
+      key: `tie:${leaders
+        .map((t) => t.targetId)
+        .sort()
+        .join(',')}`,
+    };
   }
-  return 'Count the hands and banish the chosen. This cannot be undone.';
+  const winner = leaders[0]!;
+  return {
+    detail: `Count the hands and banish ${winner.targetName}. This cannot be undone.`,
+    key: `banish:${winner.targetId}`,
+  };
+}
+
+function closeVoteDetail(p: Projection): string {
+  return closeVoteOutcome(p).detail;
 }
 
 function moderatorAction(p: Projection): ModAction | null {
@@ -747,7 +771,7 @@ function renderGrid(p: Projection, opts: GridOpts): void {
     // otherwise snaps the list shut under their finger every 10s). Auto-open
     // when the only matches are among the fallen, so a search isn't a blank grid.
     const onlyFallenMatch = query !== '' && aliveShown.length === 0 && deadShown.length > 0;
-    const open = fallenOpen ?? (opts.reveal || dead.length <= 6 || onlyFallenMatch);
+    const open = onlyFallenMatch || (fallenOpen ?? (opts.reveal || dead.length <= 6));
     const fallen = h('details', { class: 'fallen', open }, h('summary', {}, `🪦 The fallen (${dead.length})`));
     (fallen as HTMLDetailsElement).ontoggle = () => {
       fallenOpen = (fallen as HTMLDetailsElement).open;
@@ -949,20 +973,27 @@ function renderSheet(prevLabel: string | null = null): void {
     // compare against the copy they actually confirmed — not the post-render
     // string, which a live poll may have already rewritten.
     if (current.live) {
-      const promised = current.detail;
+      const promised = proj ? closeVoteOutcome(proj).key : current.detail;
       sheetConfirming = true;
       void (async () => {
         try {
-          await backgroundRefresh();
+          const freshOk = await backgroundRefresh();
+          // Cancel / Escape / veil-click nulls `sheet` while this refresh is
+          // in flight — never advance after the moderator dismissed.
+          if (sheet !== current) return;
+          if (!freshOk) {
+            toast('Couldn’t refresh the tally — the vote stays open. Try again.');
+            return;
+          }
           if (!proj || proj.phase !== current.phaseAt) {
             sheet = null;
             render();
             toast('The game moved on — that action no longer applies.');
             return;
           }
-          const fresh = closeVoteDetail(proj);
-          if (fresh !== promised) {
-            current.detail = fresh;
+          const fresh = closeVoteOutcome(proj);
+          if (fresh.key !== promised) {
+            current.detail = fresh.detail;
             render();
             toast('The tally changed — read the warning before closing.');
             return;
