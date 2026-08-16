@@ -94,8 +94,7 @@ const PHASE_META: Record<Projection['phase'], { icon: string; label: (r: number)
 let proj: Projection | null = null;
 let playerToken: string | null = null;
 let room: string | null = null;
-let busy = false;
-let veilVisible = false; // only dim the board for user-initiated calls, not background polls
+let busy = false; // a user-initiated call is in flight (background polls never set this)
 let filterText = '';
 let autoPoll = false;
 let autoPollTimer: number | null = null;
@@ -131,8 +130,20 @@ app
 // ---------------------------------------------------------------------------
 // data flow
 
-function setProjection(next: Projection): void {
+function setProjection(next: Projection, force = false): void {
   const prev = proj;
+  if (!force && prev && prev.room === next.room) {
+    // A background poll (or host push) racing a user action must never
+    // roll the board back to older state — versions are monotonic per room.
+    if (next.stateVersion < prev.stateVersion) return;
+    // Nothing changed on the server: keep the DOM (and the player's focus,
+    // selection, and scroll) exactly as it is.
+    if (next.stateVersion === prev.stateVersion && prev.phase === next.phase) {
+      proj = next;
+      if (next.player_token) playerToken = next.player_token;
+      return;
+    }
+  }
   proj = next;
   if (prev && (prev.room !== next.room || prev.phase !== next.phase)) {
     filterText = '';
@@ -154,15 +165,9 @@ function setProjection(next: Projection): void {
 
 const CALL_TIMEOUT_MS = 15_000;
 
-async function call(
-  tool: string,
-  args: Record<string, unknown> = {},
-  okMsg?: string,
-  opts: { background?: boolean } = {},
-): Promise<void> {
+async function call(tool: string, args: Record<string, unknown> = {}, okMsg?: string): Promise<void> {
   if (busy) return;
   busy = true;
-  veilVisible = !opts.background; // background autopolls never dim/block the board
   render();
   try {
     const merged: Record<string, unknown> = { ...args };
@@ -180,23 +185,49 @@ async function call(
     } else {
       const sc = result.structuredContent as Projection | undefined;
       if (sc && 'room' in (sc as object) && 'phase' in (sc as object)) {
-        proj = null; // force re-render even if stateVersion matched
-        setProjection(sc);
+        setProjection(sc, true); // the user acted: always reflect the server's answer
       }
       if (okMsg) toast(okMsg, true);
     }
   } catch (err) {
     console.error(tool, err);
-    if (!opts.background) toast('The village didn’t answer. Tap Refresh to try again.');
+    toast('The village didn’t answer. Tap Refresh to try again.');
   } finally {
     busy = false;
-    veilVisible = false;
     render();
   }
 }
 
-function refresh(opts: { background?: boolean } = {}): void {
-  if (room) void call('get_state', {}, undefined, opts);
+function refresh(): void {
+  if (room) void call('get_state');
+}
+
+/**
+ * Autopoll path: never sets `busy` (a poll must not dim the board, disable
+ * buttons, or swallow taps) and applies the result through the version-guarded
+ * setProjection, so an unchanged room costs zero DOM churn and a stale read
+ * can't clobber a newer projection.
+ */
+let pollInFlight = false;
+async function backgroundRefresh(): Promise<void> {
+  if (!room || busy || pollInFlight) return;
+  pollInFlight = true;
+  try {
+    const args: Record<string, unknown> = { room };
+    if (playerToken) args['player_token'] = playerToken;
+    const result = (await Promise.race([
+      app.callServerTool({ name: 'get_state', arguments: args }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), CALL_TIMEOUT_MS)),
+    ])) as { isError?: boolean; structuredContent?: unknown };
+    if (!result.isError) {
+      const sc = result.structuredContent as Projection | undefined;
+      if (sc && typeof sc === 'object' && 'room' in sc && 'phase' in sc) setProjection(sc);
+    }
+  } catch {
+    // Background polls fail silently; the next tick retries.
+  } finally {
+    pollInFlight = false;
+  }
 }
 
 function setAutoPoll(on: boolean): void {
@@ -210,7 +241,7 @@ function setAutoPoll(on: boolean): void {
       // Don't poll while a sheet is open or the player is typing in the filter —
       // a re-render would blow away the sheet / the input focus.
       const typing = document.activeElement?.classList.contains('filter');
-      if (!busy && !sheet && !typing && document.visibilityState === 'visible') refresh({ background: true });
+      if (!sheet && !typing && document.visibilityState === 'visible') void backgroundRefresh();
     }, 10_000);
   }
   render();
@@ -350,9 +381,9 @@ function moderatorAction(p: Projection): ModAction | null {
         tool: 'start_game',
         disabled: !enough,
         note: tooMany
-          ? `${p.lobbyCount} seated — rooms hold 80. Remove extras before starting.`
+          ? `${p.lobbyCount} seated — rooms hold 80. Tap a player to remove them.`
           : enough
-            ? `${p.lobbyCount} players ready`
+            ? `${p.lobbyCount} players ready · tap a player to remove them`
             : `${p.lobbyCount}/5 players — need at least 5`,
       };
     }
@@ -362,8 +393,20 @@ function moderatorAction(p: Projection): ModAction | null {
       return { label: '🏘️ Open discussion', detail: 'Let the accusations begin.', tool: 'advance_phase' };
     case 'DAY_DISCUSSION':
       return { label: '🗳️ Open the vote', detail: 'Time to point fingers for real.', tool: 'advance_phase' };
-    case 'DAY_VOTE':
-      return { label: '🔒 Close the vote', detail: 'Count the hands and banish the chosen. This cannot be undone.', tool: 'advance_phase', danger: true };
+    case 'DAY_VOTE': {
+      // Mirror the server's tie/no-votes elicitation guard (which the app's
+      // tool-call path can't receive) so the moderator isn't surprised when
+      // closing banishes nobody.
+      const tally = p.vote?.tally ?? [];
+      const tie = tally.length >= 2 && tally[0]!.count === tally[1]!.count;
+      const detail =
+        tally.length === 0
+          ? `${(p.vote?.votesCast ?? 0) > 0 ? 'Every vote so far is an abstain' : 'No votes have been cast'} — closing now banishes no one. This cannot be undone.`
+          : tie
+            ? `The vote is tied (${tally[0]!.targetName} and ${tally[1]!.targetName}) — closing now banishes no one. This cannot be undone.`
+            : 'Count the hands and banish the chosen. This cannot be undone.';
+      return { label: '🔒 Close the vote', detail, tool: 'advance_phase', danger: true };
+    }
     case 'DUSK':
       return { label: '🌙 Night falls', detail: 'Send the village back to sleep… some for the last time.', tool: 'advance_phase', danger: true };
     case 'ENDED':
@@ -411,7 +454,7 @@ function render(): void {
 
   if (roleCardOpen && p.you?.role && p.phase !== 'LOBBY' && p.phase !== 'ENDED') renderRoleCard(p);
   if (sheet) renderSheet();
-  if (busy && veilVisible) root.append(h('div', { class: 'busyveil' }));
+  if (busy) root.append(h('div', { class: 'busyveil' }));
 
   if (refocusFilter) {
     const again = root.querySelector<HTMLInputElement>('.filter');
@@ -569,7 +612,9 @@ function renderLobby(p: Projection): void {
   const watching =
     p.spectatorCount > 0 ? ` ${p.spectatorCount} watching${p.lobbyCount >= 80 ? ' (lobby full)' : ''}.` : '';
   const status = p.you?.spectator
-    ? 'The lobby is full — you are watching this round.'
+    ? p.lobbyCount >= 80
+      ? 'The lobby is full — you are watching this round.'
+      : 'You are watching — you will be dealt in when the room resets, if a seat is free.'
     : p.you?.isModerator
       ? 'Share the room code out loud — start when everyone is in.'
       : 'Wait for the moderator to start the game.';
@@ -641,9 +686,15 @@ function renderGrid(p: Projection, opts: GridOpts): void {
     wrap.append(input);
   }
 
+  const aliveShown = alive.filter(match);
+  const deadShown = dead.filter(match);
   const grid = h('div', { class: `grid${p.players.length > 40 ? ' compact' : ''}` });
-  for (const tile of alive.filter(match)) grid.append(renderTile(p, tile, mode, revealRoles, opts));
+  for (const tile of aliveShown) grid.append(renderTile(p, tile, mode, revealRoles, opts));
   wrap.append(grid);
+
+  if (query !== '' && aliveShown.length === 0 && deadShown.length === 0) {
+    wrap.append(h('div', { class: 'nomatch' }, `🔎 No villager matches “${filterText.trim()}”.`));
+  }
 
   if (dead.length > 0) {
     // Remember the player's expand/collapse choice across re-renders (autopoll
@@ -654,7 +705,7 @@ function renderGrid(p: Projection, opts: GridOpts): void {
       fallenOpen = (fallen as HTMLDetailsElement).open;
     };
     const deadGrid = h('div', { class: `grid${p.players.length > 40 ? ' compact' : ''}` });
-    for (const tile of dead.filter(match)) deadGrid.append(renderTile(p, tile, null, revealRoles, opts));
+    for (const tile of deadShown) deadGrid.append(renderTile(p, tile, null, revealRoles, opts));
     fallen.append(deadGrid);
     wrap.append(fallen);
   }
@@ -665,14 +716,18 @@ function renderGrid(p: Projection, opts: GridOpts): void {
 function renderTile(p: Projection, tile: Tile, mode: TargetMode, revealRoles: Map<string, string>, opts: GridOpts): HTMLElement {
   const me = p.you?.id === tile.id;
   const tappable = canTarget(p, tile, mode);
+  // Lobby room management: the moderator taps a player to remove them
+  // (kick_player is otherwise reachable only through chat).
+  const kickable = !tappable && p.phase === 'LOBBY' && !!p.you?.isModerator && !me && !busy;
   const picked =
     (p.you?.nightTarget?.id === tile.id && p.phase === 'NIGHT') ||
     (p.you?.vote?.targetId === tile.id && p.phase === 'DAY_VOTE');
 
   const el = h('div', {
-    class: `tile${tile.alive ? '' : ' dead'}${me ? ' me' : ''}${tappable ? ' tappable' : ''}${picked ? ' picked' : ''}`,
-    role: tappable ? 'button' : undefined,
-    tabindex: tappable ? '0' : undefined,
+    class: `tile${tile.alive ? '' : ' dead'}${me ? ' me' : ''}${tappable ? ' tappable' : ''}${kickable ? ' kickable' : ''}${picked ? ' picked' : ''}`,
+    role: tappable || kickable ? 'button' : undefined,
+    tabindex: tappable || kickable ? '0' : undefined,
+    title: kickable ? `Remove ${tile.name} from the lobby` : undefined,
   });
 
   if (tile.isModerator) el.append(h('span', { class: 'crown', title: 'Moderator' }, '👑'));
@@ -694,6 +749,25 @@ function renderTile(p: Projection, tile: Tile, mode: TargetMode, revealRoles: Ma
 
   if (tappable && mode) {
     const go = () => pickTarget(p, tile, mode);
+    el.onclick = go;
+    el.onkeydown = (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault();
+        go();
+      }
+    };
+  } else if (kickable) {
+    const go = () => {
+      sheet = {
+        title: `Remove ${tile.name} from the lobby?`,
+        detail: 'They can rejoin with the room code at any time.',
+        confirmLabel: '🚪 Remove',
+        danger: true,
+        phaseAt: p.phase,
+        action: () => call('kick_player', { player_id: tile.id }, `${tile.name} was removed.`),
+      };
+      render();
+    };
     el.onclick = go;
     el.onkeydown = (ev) => {
       if (ev.key === 'Enter' || ev.key === ' ') {
