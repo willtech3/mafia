@@ -226,12 +226,22 @@ const $ = (id) => document.getElementById(id);
 let prevVotes = {};
 
 function hue(name) { let h = 5381; for (let i = 0; i < name.length; i++) h = ((h << 5) + h + name.charCodeAt(i)) | 0; return ((h % 360) + 360) % 360; }
+function graphemes(s, n) {
+  if (typeof Intl !== 'undefined' && Intl.Segmenter) {
+    const out = [];
+    for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s)) {
+      out.push(segment);
+      if (out.length >= n) break;
+    }
+    return out.join('');
+  }
+  return [...s].slice(0, n).join('');
+}
 function initials(name) {
-  // Iterate by code point, not UTF-16 unit, so an emoji-first name shows a
-  // whole glyph on the projector instead of a broken surrogate half.
-  const first = (s) => [...s][0] ?? '';
+  // Grapheme clusters, not UTF-16 units or lone code points: skin-tone
+  // modifiers and ZWJ sequences stay intact on the projector.
   const p = name.trim().split(/\\s+/);
-  const two = p.length > 1 ? first(p[0]) + first(p[p.length - 1]) : [...name].slice(0, 2).join('');
+  const two = p.length > 1 ? graphemes(p[0], 1) + graphemes(p[p.length - 1], 1) : graphemes(name, 2);
   return two.toUpperCase();
 }
 
