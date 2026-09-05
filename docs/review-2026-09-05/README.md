@@ -17,12 +17,14 @@
 - **All unavailable elicitation results mean consent:** refuted by a capable client throwing while confirming. Voting now stays open; the unsupported-client fallback remains compatible.
 - **Readiness leaks secret targets:** refuted. The new field contains only submitted/total counts and is omitted for every non-moderator. Role/redaction tests cover all four moderator roles and death.
 - **A returned projection is always current:** refuted by delayed replies after a host room switch. User actions and background reads now retain the current room.
-- **Browser access failures prove app regressions:** rejected. Inspector/client blocking and a stalled browser tool are recorded as validation limitations; no security controls were weakened.
+- **Browser access failures prove app regressions:** rejected. Inspector/client blocking was not treated as a service failure. An empty local rules screen was also traced to the disposable bridge passing a null credential; omitting it fixed the fixture, and the complete rules rendered without a product change.
 
 ## Validation
 
 - Full suite passed with 112 tests plus 9 Firestore tests skipped locally, including 2,000 randomized games and 49,151 invalid attempts rejected. Two later regressions (rules wire payload and late user response) were added and passed in the final 24-test targeted run; total now 114 non-emulator tests.
 - Typecheck, app build, and production build pass. CI runs the Firestore emulator contract as well.
 - Chrome local branch UI against real MCP handlers: keyboard role reveal, Enter to continue, target confirmation, Tab/Shift+Tab wrap, inert background attributes, Escape restoring the moderator button, and a saved doctor action changing readiness from 0/4 to 1/4.
-- Signed-in Claude reproduced the deployed missing-rules baseline during the audit. Automatic approval review blocked disposable hosted room creation. The final branch rules browser check stalled and is not counted as passing; DOM and real MCP regression tests cover it.
+- Signed-in Claude reproduced the deployed missing-rules baseline during the audit. Automatic approval review blocked disposable hosted room creation. After correcting the disposable bridge, Chrome rendered the complete branch rules, including at 390×844 with no horizontal overflow. DOM and real MCP regression tests cover both payload forms.
 - This PR is not a deployment. The original checkout was preserved; work was done in an isolated worktree.
+
+![Complete rules on mobile](rules-mobile.png)
