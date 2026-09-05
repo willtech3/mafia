@@ -33,6 +33,7 @@
   "devDependencies": {
     "@types/node": "^22.15.0",
     "esbuild": "^0.28.2",
+    "linkedom": "0.18.13",
     "tsx": "^4.19.0",
     "typescript": "^5.8.0",
     "vitest": "^3.1.0"

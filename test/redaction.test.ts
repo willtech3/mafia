@@ -242,3 +242,27 @@ describe('snapshot: one projection per role at night (fixed seed)', () => {
     expect(stable(s, byRole(s, 'DETECTIVE')[0]!.id)).toMatchSnapshot('detective-night');
   });
 });
+
+describe('moderator night readiness', () => {
+  it('shows aggregate readiness for every moderator role and after death, without exposing targets', () => {
+    let state = makeGame(12);
+    const mafia = byRole(state, 'MAFIA')[0]!;
+    const target = byRole(state, 'VILLAGER')[0]!;
+    state = nightAction(state, mafia.id, target.id);
+    const total = living(state).filter(p => p.role !== 'VILLAGER').length;
+    for (const role of ['MAFIA', 'DOCTOR', 'DETECTIVE', 'VILLAGER'] as const) {
+      const id = byRole(state, role)[0]!.id;
+      const variant = structuredClone(state);
+      for (const p of Object.values(variant.players)) p.isModerator = p.id === id;
+      variant.moderatorId = id;
+      expect(viewFor(variant, id, 1).nightProgress).toEqual({ submitted: 1, total });
+      expect(viewFor(variant, null, 1).nightProgress).toBeUndefined();
+      for (const p of Object.values(variant.players).filter(p => p.id !== id)) {
+        expect(viewFor(variant, p.id, 1).nightProgress).toBeUndefined();
+        expect(viewFor(variant, p.id, 1).phaseConfirmation).toBeUndefined();
+      }
+      variant.players[id]!.alive = false;
+      expect(viewFor(variant, id, 2).nightProgress).toEqual({ submitted: id === mafia.id ? 0 : 1, total: total - (role === 'VILLAGER' ? 0 : 1) });
+    }
+  });
+});

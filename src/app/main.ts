@@ -17,6 +17,8 @@ interface Tile {
   votes?: number;
 }
 interface Projection {
+  phaseConfirmation?: { phase: Projection['phase']; round: number; generation: number; voteOutcome: string };
+  nightProgress?: { submitted: number; total: number };
   room: string;
   phase: 'LOBBY' | 'NIGHT' | 'DAWN' | 'DAY_DISCUSSION' | 'DAY_VOTE' | 'DUSK' | 'ENDED';
   round: number;
@@ -96,7 +98,11 @@ let playerToken: string | null = null;
 let room: string | null = null;
 let busy = false; // a user-initiated call is in flight (background polls never set this)
 let filterText = '';
-let autoPoll = false;
+let autoPoll = true;
+let syncFailed = false;
+let rulesText: string | null = null;
+let modalReturnFocus: string | null = null;
+let roleNeedsFocus = false;
 let autoPollTimer: number | null = null;
 let roleSeen = false;
 let roleCardOpen = false;
@@ -119,6 +125,7 @@ let sheetNeedsFocus = false;
 let sheetConfirming = false;
 
 function openSheet(next: NonNullable<typeof sheet>): void {
+  modalReturnFocus = (document.activeElement as HTMLElement | null)?.dataset.focusKey ?? null;
   sheet = next;
   sheetNeedsFocus = true;
   render();
@@ -129,7 +136,8 @@ const root = document.getElementById('app')!;
 const app = new App({ name: 'Mafia', version: '0.2.0' });
 
 app.ontoolresult = (result) => {
-  const sc = (result as { structuredContent?: unknown }).structuredContent as Projection | undefined;
+  const sc = (result as { structuredContent?: unknown }).structuredContent as (Projection & { rules?: string }) | undefined;
+  if (typeof sc?.rules === 'string') { rulesText = sc.rules; render(); } else { rulesText = null; }
   // Require phase, not just room: a partial payload (e.g. an error surface
   // that happens to carry a room code) must never reach render(), which
   // dereferences PHASE_META[phase].
@@ -138,7 +146,7 @@ app.ontoolresult = (result) => {
 
 app
   .connect()
-  .then(() => render())
+  .then(() => { setAutoPoll(autoPoll); render(); })
   .catch((err) => {
     console.error('connect failed', err);
     render();
@@ -149,6 +157,8 @@ app
 
 function setProjection(next: Projection, force = false): void {
   const prev = proj;
+  const statusChanged = syncFailed;
+  syncFailed = false;
   if (!force && prev && prev.room === next.room) {
     // A background poll (or host push) racing a user action must never
     // roll the board back to older state — versions are monotonic per room.
@@ -162,6 +172,7 @@ function setProjection(next: Projection, force = false): void {
     ) {
       proj = next;
       if (next.player_token) playerToken = next.player_token;
+      if (statusChanged) updateSyncStatus();
       return;
     }
   }
@@ -179,6 +190,7 @@ function setProjection(next: Projection, force = false): void {
   // Later renders (fresh iframes mid-game) rely on the Role button instead.
   if (next.you?.role && next.phase === 'NIGHT' && next.round === 1 && !roleSeen && prev?.phase !== 'NIGHT') {
     roleCardOpen = true;
+    roleNeedsFocus = true;
     cardFlipped = false;
   }
   render();
@@ -188,6 +200,7 @@ const CALL_TIMEOUT_MS = 15_000;
 
 async function call(tool: string, args: Record<string, unknown> = {}, okMsg?: string): Promise<void> {
   if (busy) return;
+  const requestedRoom = room;
   busy = true;
   render();
   try {
@@ -201,16 +214,20 @@ async function call(tool: string, args: Record<string, unknown> = {}, okMsg?: st
       app.callServerTool({ name: tool, arguments: merged }),
       new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), CALL_TIMEOUT_MS)),
     ])) as { isError?: boolean; content?: { type: string; text?: string }[]; structuredContent?: unknown };
+    // A result for an old board must not switch the user back after a host room change.
+    if (room !== requestedRoom && merged['room'] === requestedRoom) return;
     if (result.isError) {
       toast(result.content?.find((c) => c.type === 'text')?.text ?? 'That didn’t work — try Refresh.');
     } else {
       const sc = result.structuredContent as Projection | undefined;
       if (sc && 'room' in (sc as object) && 'phase' in (sc as object)) {
-        setProjection(sc, true); // the user acted: always reflect the server's answer
+        rulesText = null;
+        setProjection(sc); // Never roll back a newer host push, even after a user action.
       }
       if (okMsg) toast(okMsg, true);
     }
   } catch (err) {
+    syncFailed = true;
     console.error(tool, err);
     toast('The village didn’t answer. Tap Refresh to try again.');
   } finally {
@@ -232,11 +249,12 @@ function refresh(): void {
 let pollInFlight: Promise<boolean> | null = null;
 /** @returns true when a usable projection was applied. Autopoll ignores the flag. */
 async function backgroundRefresh(): Promise<boolean> {
-  if (!room || busy) return false;
+  if (!room || busy || rulesText) return false;
   if (pollInFlight) return pollInFlight;
+  const requestedRoom = room;
   pollInFlight = (async () => {
     try {
-      const args: Record<string, unknown> = { room };
+      const args: Record<string, unknown> = { room: requestedRoom };
       if (playerToken) args['player_token'] = playerToken;
       const result = (await Promise.race([
         app.callServerTool({ name: 'get_state', arguments: args }),
@@ -245,19 +263,28 @@ async function backgroundRefresh(): Promise<boolean> {
       if (!result.isError) {
         const sc = result.structuredContent as Projection | undefined;
         if (sc && typeof sc === 'object' && 'room' in sc && 'phase' in sc) {
+          if (room !== requestedRoom) return false;
           setProjection(sc);
           return true;
         }
       }
       return false;
     } catch {
-      // Background polls fail silently; the next tick retries.
+      // The next visible tick retries; keep the stale-state warning visible.
       return false;
     } finally {
       pollInFlight = null;
+      updateSyncStatus();
     }
   })();
-  return pollInFlight;
+  const ok = await pollInFlight;
+  if (room === requestedRoom) { syncFailed = !ok; updateSyncStatus(); }
+  return ok;
+}
+
+function updateSyncStatus(): void {
+  const status = root.querySelector('.sync-status');
+  if (status) status.textContent = syncFailed ? (autoPoll ? 'Couldn’t refresh — showing the last update. Retrying…' : 'Couldn’t refresh — tap Refresh to retry.') : autoPoll ? 'Live · updates every 10 seconds' : 'Paused · tap Refresh for updates';
 }
 
 function setAutoPoll(on: boolean): void {
@@ -271,12 +298,18 @@ function setAutoPoll(on: boolean): void {
       // Don't poll while a frozen sheet is open or the player is typing —
       // a re-render would steal focus. Live sheets (close-vote) *want* polls
       // so the warning tracks the current tally.
-      const typing = document.activeElement?.classList.contains('filter');
-      if ((!sheet || sheet.live) && !typing && document.visibilityState === 'visible') void backgroundRefresh();
+      if (canAutoRefresh()) void backgroundRefresh();
     }, 10_000);
   }
   render();
 }
+
+function canAutoRefresh(): boolean {
+  return autoPoll && (!sheet || !!sheet.live) && !roleCardOpen && !document.activeElement?.classList.contains('filter') && document.visibilityState !== 'hidden';
+}
+document.addEventListener('visibilitychange', () => {
+  if (canAutoRefresh()) void backgroundRefresh();
+});
 
 // ---------------------------------------------------------------------------
 // dom helpers
@@ -301,7 +334,7 @@ function h<K extends keyof HTMLElementTagNameMap>(
 }
 
 function btn(label: string, cls: string, onclick: () => void, disabled = false): HTMLButtonElement {
-  const b = h('button', { class: `btn ${cls}` }, label);
+  const b = h('button', { class: `btn ${cls}`, 'data-focus-key': label }, label);
   b.disabled = disabled || busy;
   b.onclick = onclick;
   return b;
@@ -313,7 +346,7 @@ function toast(message: string, ok = false): void {
   // call, which would destroy the toast before it ever painted. Body + fixed
   // positioning (see .toast in styles.css) keeps feedback visible.
   document.querySelectorAll('.toast').forEach((t) => t.remove());
-  const el = h('div', { class: `toast${ok ? ' ok' : ''}` }, message);
+  const el = h('div', { class: `toast${ok ? ' ok' : ''}`, role: ok ? 'status' : 'alert', 'aria-live': ok ? 'polite' : 'assertive' }, message);
   document.body.append(el);
   if (toastTimer !== null) clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => el.remove(), ok ? 2600 : 5200);
@@ -488,6 +521,7 @@ function render(): void {
   // Preserve filter focus/caret across the full rebuild (autopoll + host
   // pushes re-render while the player may be mid-word searching 80 names).
   const active = document.activeElement;
+  const focusKey = (active as HTMLElement | null)?.dataset.focusKey;
   const refocusFilter = active instanceof HTMLInputElement && active.classList.contains('filter');
   const caret = refocusFilter ? active.selectionStart : null;
   const sheetBtnLabel =
@@ -496,6 +530,11 @@ function render(): void {
   root.textContent = '';
   const day = proj && PHASE_META[proj.phase]?.day && proj.phase !== 'ENDED';
   root.className = `app${day ? ' day' : ''}${proj?.phase === 'ENDED' ? ' ended' : ''}`;
+  if (rulesText) {
+    root.append(h('h2', {}, 'How to play Mafia'), h('div', { class: 'rules' }, rulesText));
+    if (proj) root.append(btn('Back to the village', 'primary', () => { rulesText = null; render(); }));
+    return;
+  }
   if (!proj) {
     root.append(
       h(
@@ -521,8 +560,10 @@ function render(): void {
 
   renderModBar(p);
 
-  if (roleCardOpen && p.you?.role && p.phase !== 'LOBBY' && p.phase !== 'ENDED') renderRoleCard(p);
+  if (roleCardOpen && p.you?.role && p.phase !== 'LOBBY' && p.phase !== 'ENDED') renderRoleCard(p, focusKey);
   if (sheet) renderSheet(sheetBtnLabel);
+  updateSyncStatus();
+  if (focusKey && !sheet && !roleCardOpen) focusByKey(focusKey);
   if (busy) root.append(h('div', { class: 'busyveil' }));
 
   if (refocusFilter) {
@@ -547,24 +588,26 @@ function renderTop(p: Projection): void {
   // Role card is meaningful only while a game is in progress (not lobby, and
   // not ENDED where the victory screen already reveals everyone).
   if (p.you?.role && p.phase !== 'LOBBY' && p.phase !== 'ENDED') {
-    const roleBtn = h('button', { class: 'iconbtn', title: 'Show my role card' }, ROLE_ART[p.you.role]?.icon ?? '🎭', ' Role');
+    const roleBtn = h('button', { class: 'iconbtn', title: 'Show my role card', 'data-focus-key': 'role' }, '🎭 Role');
     roleBtn.onclick = () => {
+      modalReturnFocus = 'role';
       roleCardOpen = true;
-      cardFlipped = true;
+      roleNeedsFocus = true;
+      cardFlipped = false;
       render();
     };
     bar.append(roleBtn);
   }
 
-  const pollBtn = h('button', { class: `iconbtn${autoPoll ? ' on' : ''}`, title: 'Auto-refresh every 10 seconds' }, autoPoll ? '⏱ Auto ✓' : '⏱ Auto');
+  const pollBtn = h('button', { class: `iconbtn${autoPoll ? ' on' : ''}`, title: 'Auto-refresh every 10 seconds', 'aria-pressed': String(autoPoll), 'data-focus-key': 'auto' }, autoPoll ? '⏱ Auto ✓' : '⏱ Auto');
   pollBtn.onclick = () => setAutoPoll(!autoPoll);
 
-  const refreshBtn = h('button', { class: 'iconbtn', title: 'Refresh now' }, busy ? h('span', { class: 'spin' }, '↻') : '↻', ' Refresh');
+  const refreshBtn = h('button', { class: 'iconbtn', title: 'Refresh now', 'data-focus-key': 'refresh' }, busy ? h('span', { class: 'spin' }, '↻') : '↻', ' Refresh');
   refreshBtn.onclick = () => refresh();
   (refreshBtn as HTMLButtonElement).disabled = busy;
 
   bar.append(pollBtn, refreshBtn);
-  root.append(bar);
+  root.append(bar, h('div', { class: 'sync-status', role: 'status', 'aria-live': 'polite' }));
 }
 
 function renderNarration(p: Projection): void {
@@ -796,6 +839,7 @@ function renderTile(p: Projection, tile: Tile, mode: TargetMode, revealRoles: Ma
     (p.you?.vote?.targetId === tile.id && p.phase === 'DAY_VOTE');
 
   const el = h('div', {
+    'data-focus-key': `player:${tile.id}`,
     class: `tile${tile.alive ? '' : ' dead'}${me ? ' me' : ''}${tappable ? ' tappable' : ''}${kickable ? ' kickable' : ''}${picked ? ' picked' : ''}`,
     role: tappable || kickable ? 'button' : undefined,
     tabindex: tappable || kickable ? '0' : undefined,
@@ -854,16 +898,17 @@ function renderModBar(p: Projection): void {
   const action = moderatorAction(p);
   const bar = h('div', { class: 'modbar' });
   if (action) {
+    if (p.nightProgress) bar.append(h('span', { class: 'night-progress', role: 'status' }, `${p.nightProgress.submitted}/${p.nightProgress.total} night actions in`));
     bar.append(
       btn(action.label, action.danger ? 'danger' : 'primary', () => {
         openSheet({
           title: action.label.replace(/^\S+\s/, ''),
-          detail: action.detail,
+          detail: p.phase === 'NIGHT' && p.nightProgress && p.nightProgress.submitted < p.nightProgress.total ? `${p.nightProgress.submitted}/${p.nightProgress.total} night actions are in. Resolve the night with missing actions?` : action.detail,
           confirmLabel: action.label,
           danger: action.danger ?? false,
           phaseAt: p.phase,
           live: p.phase === 'DAY_VOTE' && action.tool === 'advance_phase',
-          action: () => call(action.tool, {}),
+          action: () => call(action.tool, action.tool === 'advance_phase' ? { expected: p.phase === 'DAY_VOTE' ? proj?.phaseConfirmation : p.phaseConfirmation } : {}),
         });
       }, action.disabled),
       h('span', { class: 'note' }, action.note ?? '👑 You are the moderator — you set the pace.'),
@@ -875,18 +920,18 @@ function renderModBar(p: Projection): void {
   }
 }
 
-function renderRoleCard(p: Projection): void {
+function renderRoleCard(p: Projection, focusKey?: string): void {
   const you = p.you!;
   const art = ROLE_ART[you.role!] ?? ROLE_ART['VILLAGER']!;
-  const wrap = h('div', { class: `rolewrap${cardFlipped ? ' revealed' : ''}` });
+  const wrap = h('div', { class: `rolewrap${cardFlipped ? ' revealed' : ''}`, role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Your private role card' });
 
-  const card = h('div', { class: `rolecard${cardFlipped ? ' flipped' : ''}` });
+  const card = h('button', { type: 'button', class: `rolecard${cardFlipped ? ' flipped' : ''}`, 'aria-label': cardFlipped ? 'Role revealed' : 'Reveal your role', 'data-focus-key': 'reveal-role' });
   const inner = h('div', { class: 'inner' });
 
   inner.append(
     h(
       'div',
-      { class: 'face back' },
+      { class: 'face back', 'aria-hidden': String(cardFlipped) },
       h('div', { class: 'emblem' }, '🏮'),
       h('div', { class: 't' }, `${you.name}, your fate is sealed inside.`),
       h('div', { class: 'tap' }, 'tap to reveal'),
@@ -895,7 +940,7 @@ function renderRoleCard(p: Projection): void {
 
   const front = h(
     'div',
-    { class: `face front ${art.cls}` },
+    { class: `face front ${art.cls}`, 'aria-hidden': String(!cardFlipped) },
     h('div', { class: 'icon' }, art.icon),
     h('div', { class: 'rname' }, art.label),
     h('div', { class: 'flavor' }, art.flavor),
@@ -924,11 +969,32 @@ function renderRoleCard(p: Projection): void {
     roleCardOpen = false;
     roleSeen = true;
     render();
+    focusByKey(modalReturnFocus ?? 'role');
   });
   cont.classList.add('continue');
+  cont.disabled = !cardFlipped;
 
   wrap.append(card, cont, h('div', { class: 'hintline' }, 'Keep it secret. Keep your phone close.'));
+  makeModal(wrap, () => { roleCardOpen = false; render(); focusByKey(modalReturnFocus ?? 'role'); });
   root.append(wrap);
+  if (roleNeedsFocus) { card.focus(); roleNeedsFocus = false; }
+  else if (focusKey) focusByKey(focusKey);
+}
+
+function focusByKey(key: string): void {
+  [...root.querySelectorAll<HTMLElement>('[data-focus-key]')].find((el) => el.dataset.focusKey === key)?.focus();
+}
+
+function makeModal(el: HTMLElement, close: () => void): void {
+  for (const sibling of root.children) (sibling as HTMLElement).inert = true;
+  el.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') { ev.preventDefault(); close(); return; }
+    if (ev.key !== 'Tab') return;
+    const buttons = [...el.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+    const first = buttons[0], last = buttons.at(-1);
+    if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last?.focus(); }
+    else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first?.focus(); }
+  });
 }
 
 function renderSheet(prevLabel: string | null = null): void {
@@ -940,22 +1006,17 @@ function renderSheet(prevLabel: string | null = null): void {
   const close = () => {
     sheet = null;
     render();
+    if (modalReturnFocus) focusByKey(modalReturnFocus);
   };
   const veil = h('div', { class: 'sheetveil' });
   veil.onclick = (ev) => {
     if (ev.target === veil) close();
   };
-  veil.onkeydown = (ev) => {
-    if (ev.key === 'Escape') {
-      ev.preventDefault();
-      close();
-    }
-  };
   const box = h(
     'div',
-    { class: 'sheet' },
-    h('div', { class: 'q' }, current.title),
-    h('div', { class: 'd' }, current.detail),
+    { class: 'sheet', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'sheet-title', 'aria-describedby': 'sheet-detail' },
+    h('div', { class: 'q', id: 'sheet-title' }, current.title),
+    h('div', { class: 'd', id: 'sheet-detail' }, current.detail),
   );
   const btns = h('div', { class: 'btns' });
   const confirmBtn = btn(current.confirmLabel, current.danger ? 'danger' : 'primary', () => {
@@ -1015,6 +1076,7 @@ function renderSheet(prevLabel: string | null = null): void {
   );
   box.append(btns);
   veil.append(box);
+  makeModal(veil, close);
   root.append(veil);
   if (sheetNeedsFocus) {
     confirmBtn.focus(); // first open only — live refreshes must not yank focus off Cancel

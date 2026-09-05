@@ -10,6 +10,7 @@ import {
   type Role,
   type RoomState,
 } from './types.js';
+import { phaseConfirmation, type PhaseConfirmation } from './reducer.js';
 
 /**
  * viewFor(state, viewerId): the ONLY way game state leaves the server.
@@ -41,6 +42,8 @@ export interface PlayerTile {
 }
 
 export interface Projection {
+  phaseConfirmation?: PhaseConfirmation;
+  nightProgress?: { submitted: number; total: number };
   room: string;
   phase: Phase;
   round: number;
@@ -139,6 +142,14 @@ export function viewFor(state: RoomState, viewerId: string | null, stateVersion:
     narration: state.narration.slice(-NARRATION_LIMIT),
     next_step_hint: '',
   };
+
+  if (viewer?.isModerator) {
+    projection.phaseConfirmation = phaseConfirmation(state);
+    if (state.phase === 'NIGHT') {
+      const actors = living.filter((p) => p.role !== 'VILLAGER');
+      projection.nightProgress = { submitted: actors.filter((p) => state.actions[p.id]).length, total: actors.length };
+    }
+  }
 
   if (state.phase === 'DAY_VOTE') {
     const valid = Object.values(state.votes).filter((v) => state.players[v.playerId]?.alive);
