@@ -86,7 +86,17 @@ exports[`snapshot: one projection per role at night (fixed seed) > matches the r
     },
   ],
   "next_step_hint": "It’s night — open the app and choose someone to protect (you may protect yourself). (Moderator: 1/3 night actions in — you close the night when ready.)",
+  "nightProgress": {
+    "submitted": 1,
+    "total": 3,
+  },
   "phase": "NIGHT",
+  "phaseConfirmation": {
+    "generation": 0,
+    "phase": "NIGHT",
+    "round": 1,
+    "voteOutcome": "none",
+  },
   "players": [
     {
       "alive": true,

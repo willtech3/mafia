@@ -30,7 +30,7 @@ export type GameEvent =
   | { type: 'START'; byPlayerId: string }
   | { type: 'NIGHT_ACTION'; playerId: string; targetId: string; seq: number }
   | { type: 'VOTE'; playerId: string; targetId: string; seq: number }
-  | { type: 'ADVANCE'; byPlayerId: string }
+  | { type: 'ADVANCE'; byPlayerId: string; expected?: PhaseConfirmation }
   | { type: 'KICK'; byPlayerId: string; targetId: string }
   | { type: 'RESET'; byPlayerId: string; seed: string };
 
@@ -326,8 +326,40 @@ function applyVote(state: RoomState, event: { playerId: string; targetId: string
   return next;
 }
 
-function applyAdvance(state: RoomState, event: { byPlayerId: string }): RoomState {
+export interface PhaseConfirmation {
+  phase: RoomState['phase'];
+  round: number;
+  generation: number;
+  voteOutcome: string;
+}
+
+/** Describes the outcome being confirmed, not a mutable vote count. */
+export function phaseConfirmation(state: RoomState): PhaseConfirmation {
+  const counts = new Map<string, number>();
+  if (state.phase === 'DAY_VOTE') {
+    for (const vote of Object.values(state.votes)) {
+      const actor = state.players[vote.playerId];
+      if (!actor?.alive || actor.spectator || !actor.role || vote.targetId === 'ABSTAIN') continue;
+      if (!state.players[vote.targetId]?.alive) continue;
+      counts.set(vote.targetId, (counts.get(vote.targetId) ?? 0) + 1);
+    }
+  }
+  const ranked = [...counts].sort((a, b) => b[1] - a[1]);
+  const leader = ranked[0];
+  const voteOutcome = leader && leader[1] !== ranked[1]?.[1] ? `banish:${leader[0]}` : 'none';
+  return { phase: state.phase, round: state.round, generation: state.generation, voteOutcome };
+}
+
+function applyAdvance(state: RoomState, event: { byPlayerId: string; expected?: PhaseConfirmation }): RoomState {
   requireModerator(state, event.byPlayerId, 'advance the phase');
+  if (event.expected) {
+    const current = phaseConfirmation(state);
+    const expected = event.expected;
+    if (current.phase !== expected.phase || current.round !== expected.round ||
+        current.generation !== expected.generation || current.voteOutcome !== expected.voteOutcome) {
+      fail('CONFLICT', 'The phase or vote outcome changed. Refresh the board and confirm the current result before advancing.');
+    }
+  }
   switch (state.phase) {
     case 'LOBBY':
       fail('WRONG_PHASE', 'The game hasn’t started yet. Use start_game once everyone has joined.');

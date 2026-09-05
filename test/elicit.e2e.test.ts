@@ -170,3 +170,35 @@ describe('vote-close confirmation (tie / empty vote only)', () => {
     await mod.close();
   }, 30_000);
 });
+
+describe('vote-close race and failed confirmation', () => {
+  it('refuses to banish someone when the accepted warning promised no banishment', async () => {
+    let voter: MafiaClient;
+    let target = '';
+    let code = '';
+    const setup = await nightRoom({ onElicit: async () => {
+      await voter.must('cast_vote', { room: code, target_player_id: target });
+      return { action: 'accept', content: { confirm: true } };
+    } });
+    code = setup.code;
+    voter = setup.everyone[1]!;
+    target = (await setup.everyone[2]!.state()).you!.id;
+    for (let i = 0; i < 3; i++) await setup.mod.must('advance_phase', { room: code });
+    const result = await setup.mod.call('advance_phase', { room: code });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('outcome changed');
+    const state = await setup.mod.state();
+    expect(state.phase).toBe('DAY_VOTE');
+    expect(state.players.find(p => p.id === target)?.alive).toBe(true);
+    for (const p of setup.everyone) await p.close();
+  });
+
+  it('keeps voting open when a capable client fails to answer', async () => {
+    const setup = await nightRoom({ onElicit: () => { throw new Error('Connection interrupted'); } });
+    for (let i = 0; i < 3; i++) await setup.mod.must('advance_phase', { room: setup.code });
+    const result = await setup.mod.must('advance_phase', { room: setup.code });
+    expect(result.projection!.phase).toBe('DAY_VOTE');
+    expect(result.text).toContain('vote stays open');
+    for (const p of setup.everyone) await p.close();
+  });
+});

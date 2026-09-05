@@ -5,7 +5,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { APP_HTML } from './apphtml.generated.js';
 import { GameError } from '../game/errors.js';
-import { initialRoom, sanitizeName } from '../game/reducer.js';
+import { initialRoom, sanitizeName, phaseConfirmation } from '../game/reducer.js';
 import type { Phase, RoomState } from '../game/types.js';
 import { viewFor, type Projection } from '../game/view.js';
 import { runEvent } from '../store/engine.js';
@@ -55,6 +55,9 @@ function uiMeta(): Record<string, unknown> {
  * bare how_to_play response validate too.
  */
 const PROJECTION_OUTPUT = {
+  rules: z.string().optional(),
+  phaseConfirmation: z.record(z.unknown()).optional(),
+  nightProgress: z.record(z.unknown()).optional(),
   room: z.string().optional(),
   phase: z.string().optional(),
   round: z.number().optional(),
@@ -486,7 +489,7 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
                 text: `${RULES_TEXT}\n\nNext step: use join_room to take a seat (no code needed if a game is open).`,
               },
             ],
-            structuredContent: { next_step_hint: 'Use join_room to take a seat — no code needed if a game is open.' },
+            structuredContent: { rules: RULES_TEXT, next_step_hint: 'Use join_room to take a seat — no code needed if a game is open.' },
           };
         }
         const code = normalizeRoomCode(room);
@@ -495,7 +498,7 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
         const projection = viewFor(state, viewer, version);
         return {
           content: [{ type: 'text', text: `${RULES_TEXT}\n\nYour current situation: ${projection.next_step_hint}` }],
-          structuredContent: projection as unknown as Record<string, unknown>,
+          structuredContent: { ...projection, rules: RULES_TEXT } as unknown as Record<string, unknown>,
         };
       } catch (err) {
         return errorResult(err);
@@ -658,12 +661,21 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
       title: 'Advance to the next phase',
       description:
         'Moderator only: close the current phase and move the game forward (night → dawn → discussion → vote → dusk → night...). This resolves pending actions and cannot be undone.',
-      inputSchema: { room: roomArg, player_token: tokenArg },
+      inputSchema: {
+        room: roomArg,
+        player_token: tokenArg,
+        expected: z.object({
+          phase: z.enum(['LOBBY', 'NIGHT', 'DAWN', 'DAY_DISCUSSION', 'DAY_VOTE', 'DUSK', 'ENDED']),
+          round: z.number().int().nonnegative(),
+          generation: z.number().int().nonnegative(),
+          voteOutcome: z.string(),
+        }).optional().describe('Copy phaseConfirmation from the board being confirmed. A changed phase or vote outcome requires a fresh confirmation.'),
+      },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
       _meta: uiMeta(),
       outputSchema: PROJECTION_OUTPUT,
     },
-    async ({ room, player_token }, extra) => {
+    async ({ room, player_token, expected }, extra) => {
       try {
         const code = normalizeRoomCode(room);
         const id = await identityFor(ctx, player_token, code);
@@ -672,6 +684,7 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
         // confirm with the moderator when their client supports elicitation.
         // The normal leader-banished path never double-confirms.
         const before = await loadRoom(ctx, code);
+        const confirmed = expected ?? phaseConfirmation(before.state);
         if (before.state.phase === 'DAY_VOTE' && before.state.moderatorId === id.playerId) {
           const view = viewFor(before.state, id.playerId, before.version);
           const tally = view.vote?.tally ?? [];
@@ -697,14 +710,16 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
               // window here only matters for the chat path.
               timeoutMs: 12_000,
             });
-            if (outcome.kind === 'declined' || (outcome.kind === 'accept' && outcome.content['confirm'] === false)) {
+            if (outcome.kind === 'declined' ||
+                (outcome.kind === 'accept' && outcome.content['confirm'] !== true) ||
+                (outcome.kind === 'unavailable' && !outcome.unsupported)) {
               return await project(ctx, code, id.playerId, 'The vote stays open.');
             }
-            // accept or unavailable -> proceed (the app confirm sheet already guarded this).
+            // Only affirmative confirmation or an explicitly unsupported client may proceed.
           }
         }
 
-        await runEvent(store, code, { type: 'ADVANCE', byPlayerId: id.playerId });
+        await runEvent(store, code, { type: 'ADVANCE', byPlayerId: id.playerId, expected: confirmed });
         const result = await project(ctx, code, id.playerId);
         // Lead with the freshest narration so the moderator can read it aloud.
         const projection = result.structuredContent as unknown as Projection;

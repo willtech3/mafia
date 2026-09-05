@@ -243,3 +243,18 @@ describe('projection payload stays lean over the wire', () => {
     server.close();
   }, 60_000);
 });
+
+it('includes the complete rules in widget data with and without a room', async () => {
+  const client = new MafiaClient(urlA, 'rules-review');
+  await client.connect();
+  const bare = await client.raw().callTool({ name: 'how_to_play', arguments: {} });
+  const rules = bare.structuredContent as { rules?: string; phase?: string };
+  expect(rules.rules).toContain('MAFIA');
+  expect(rules.rules!.length).toBeGreaterThan(500);
+  expect(rules.phase).toBeUndefined();
+  const created = await client.must('create_room', { name: 'Rules QA', featured: false });
+  const seated = await client.raw().callTool({ name: 'how_to_play', arguments: { room: created.projection!.room, player_token: client.playerToken } });
+  expect((seated.structuredContent as { rules?: string }).rules).toBe(rules.rules);
+  expect((seated.structuredContent as { phase?: string }).phase).toBe('LOBBY');
+  await client.close();
+});

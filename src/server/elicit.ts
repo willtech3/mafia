@@ -22,7 +22,7 @@ import type { RoomStore } from '../store/types.js';
 export type ElicitOutcome =
   | { kind: 'accept'; content: Record<string, unknown> }
   | { kind: 'declined' }
-  | { kind: 'unavailable'; reason: string };
+  | { kind: 'unavailable'; reason: string; unsupported?: boolean };
 
 /** Minimal structural slice of the SDK's RequestHandlerExtra we rely on. */
 export interface ElicitCapableExtra {
@@ -69,7 +69,8 @@ export async function elicitForm(opts: {
       return outcomeFromResult(result);
     } catch (err) {
       if (settled) return { kind: 'unavailable', reason: 'lost race' }; // ignored
-      return { kind: 'unavailable', reason: (err as Error).message ?? 'client rejected elicitation' };
+      const reason = (err as Error).message ?? 'client rejected elicitation';
+      return { kind: 'unavailable', reason, unsupported: (err as { code?: number }).code === -32601 || /does not support|method not found/i.test(reason) };
     }
   })();
 
@@ -88,7 +89,7 @@ export async function elicitForm(opts: {
           return { kind: 'unavailable', reason: 'malformed relayed response' };
         }
         if (orphan?.error) {
-          return { kind: 'unavailable', reason: 'client rejected elicitation' };
+          return { kind: 'unavailable', reason: 'client rejected elicitation', unsupported: (orphan.error as { code?: number }).code === -32601 };
         }
       } catch {
         // store hiccup — keep polling
