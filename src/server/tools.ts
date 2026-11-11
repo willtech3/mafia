@@ -20,6 +20,7 @@ import {
   resolveIdentity,
   type PlayerIdentity,
 } from './identity.js';
+import { describeProjection } from './digest.js';
 import { RULES_TEXT, SERVER_INSTRUCTIONS } from './instructions.js';
 
 /**
@@ -55,6 +56,7 @@ function uiMeta(): Record<string, unknown> {
  * bare how_to_play response validate too.
  */
 const PROJECTION_OUTPUT = {
+  message: z.string().optional(),
   rules: z.string().optional(),
   phaseConfirmation: z.record(z.unknown()).optional(),
   nightProgress: z.record(z.unknown()).optional(),
@@ -135,12 +137,19 @@ function phaseLabel(phase: Phase, round: number): string {
   }
 }
 
+/**
+ * Hosts differ on which half of a result their model reads — text only
+ * (claude.ai) or structuredContent only (Claude Code / Agent SDK) — so both
+ * halves carry everything: the text gets a digest of the projection, and the
+ * structured half gets the lead sentence as `message`.
+ */
 function resultFor(projection: Projection, lead?: string): CallToolResult {
-  const header = `Room ${projection.room} · ${phaseLabel(projection.phase, projection.round)} · ${projection.aliveCount} alive`;
-  const lines = [lead, header, projection.next_step_hint].filter(Boolean);
+  const count = projection.phase === 'LOBBY' ? `${projection.lobbyCount} in the lobby` : `${projection.aliveCount} alive`;
+  const header = `Room ${projection.room} · ${phaseLabel(projection.phase, projection.round)} · ${count}`;
+  const lines = [lead, header, ...describeProjection(projection), `Next step: ${projection.next_step_hint}`].filter(Boolean);
   return {
     content: [{ type: 'text', text: lines.join('\n') }],
-    structuredContent: projection as unknown as Record<string, unknown>,
+    structuredContent: { ...(lead ? { message: lead } : {}), ...projection } as unknown as Record<string, unknown>,
   };
 }
 
@@ -241,6 +250,31 @@ function viewerFromState(ctx: ToolCtx, tokenFromArgs: string | undefined, code: 
   }
   const id = resolveIdentity(ctx.bearer, tokenFromArgs);
   return id?.roomCode === code ? id.playerId : null;
+}
+
+/**
+ * Read-only tools tolerate an unknown caller (they show the public view), but
+ * silently doing so hides the most common mistake: a model that dropped or
+ * mangled its player_token gets a role-less board, concludes its player is
+ * not in the game, and "fixes" it with a second join_room — a duplicate seat
+ * that is a spectator once the game has started. Say what happened instead.
+ */
+function publicViewNote(ctx: ToolCtx, tokenFromArgs: string | undefined, code: string, state: RoomState): string {
+  const supplied = tokenFromArgs?.trim() || ctx.bearer;
+  if (!supplied) {
+    return 'Public view only — no player_token was passed. If this player already has a seat here, call again with the player_token from their join_room/create_room result (do NOT join again).';
+  }
+  const id = resolveIdentity(ctx.bearer, tokenFromArgs);
+  if (!id) {
+    return 'Public view only — that player_token is not valid (it may be truncated or mistyped). Pass it exactly as join_room/create_room returned it. Do NOT join again: that would create a second seat.';
+  }
+  if (id.roomCode !== code) {
+    return `Public view only — that player_token is for room ${id.roomCode}, not ${code}. Check the room code.`;
+  }
+  if (!state.players[id.playerId]) {
+    return 'Public view only — the seat for that player_token is no longer in this room (the moderator removed it). Use join_room to take a new seat.';
+  }
+  return 'Public view only.';
 }
 
 /** Accept a player id or a (unique, case-insensitive) player name. */
@@ -461,7 +495,8 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
         const code = normalizeRoomCode(room);
         const stored = await loadRoom(ctx, code);
         const viewer = viewerFromState(ctx, player_token, code, stored.state);
-        return await project(ctx, code, viewer, undefined, { preloaded: stored });
+        const note = viewer ? undefined : publicViewNote(ctx, player_token, code, stored.state);
+        return await project(ctx, code, viewer, note, { preloaded: stored });
       } catch (err) {
         return errorResult(err);
       }
@@ -493,12 +528,14 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
           };
         }
         const code = normalizeRoomCode(room);
-        const { state, version } = await loadRoom(ctx, code);
-        const viewer = viewerFromState(ctx, player_token, code, state);
-        const projection = viewFor(state, viewer, version);
+        const stored = await loadRoom(ctx, code);
+        const viewer = viewerFromState(ctx, player_token, code, stored.state);
+        const note = viewer ? undefined : publicViewNote(ctx, player_token, code, stored.state);
+        const result = await project(ctx, code, viewer, note, { preloaded: stored });
+        const situation = (result.content[0] as { text: string }).text;
         return {
-          content: [{ type: 'text', text: `${RULES_TEXT}\n\nYour current situation: ${projection.next_step_hint}` }],
-          structuredContent: { ...projection, rules: RULES_TEXT } as unknown as Record<string, unknown>,
+          content: [{ type: 'text', text: `${RULES_TEXT}\n\nYour current situation:\n${situation}` }],
+          structuredContent: { ...result.structuredContent, rules: RULES_TEXT },
         };
       } catch (err) {
         return errorResult(err);
@@ -685,7 +722,14 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
         // The normal leader-banished path never double-confirms.
         const before = await loadRoom(ctx, code);
         const confirmed = expected ?? phaseConfirmation(before.state);
-        if (before.state.phase === 'DAY_VOTE' && before.state.moderatorId === id.playerId) {
+        // A caller that sends `expected` with voteOutcome "none" has already
+        // been shown — and accepted — that nobody is banished: the app's own
+        // confirm sheet, or the retry spelled out below. Asking again would
+        // double-prompt, and on a host that never answers elicitation it would
+        // make a tied or empty vote impossible to close at all. The reducer
+        // still rejects the advance if the outcome changed in the meantime.
+        const alreadyConfirmed = expected?.phase === 'DAY_VOTE' && expected.voteOutcome === 'none';
+        if (before.state.phase === 'DAY_VOTE' && before.state.moderatorId === id.playerId && !alreadyConfirmed) {
           const view = viewFor(before.state, id.playerId, before.version);
           const tally = view.vote?.tally ?? [];
           const tie = tally.length >= 2 && tally[0]!.count === tally[1]!.count;
@@ -710,24 +754,33 @@ export function buildServer(store: RoomStore, bearer?: string, oidc?: OidcIdenti
               // window here only matters for the chat path.
               timeoutMs: 12_000,
             });
-            if (outcome.kind === 'declined' ||
-                (outcome.kind === 'accept' && outcome.content['confirm'] !== true) ||
-                (outcome.kind === 'unavailable' && !outcome.unsupported)) {
+            if (outcome.kind === 'declined' || (outcome.kind === 'accept' && outcome.content['confirm'] !== true)) {
               return await project(ctx, code, id.playerId, 'The vote stays open.');
+            }
+            if (outcome.kind === 'unavailable' && !outcome.unsupported) {
+              // No answer (timeout / dropped request). Don't close silently —
+              // but don't dead-end either: say why, and how to confirm.
+              const why =
+                tally.length === 0
+                  ? (view.vote?.votesCast ?? 0) > 0
+                    ? 'every vote so far is an abstain'
+                    : 'no votes have been cast'
+                  : `the vote is tied (${formatNameList(tiedLeaders(tally))})`;
+              return await project(
+                ctx,
+                code,
+                id.playerId,
+                `The vote stays open: ${why}, so closing now would banish no one, and that needs the moderator's explicit OK. Ask them. If they say to close it anyway, call advance_phase again with expected set to ${JSON.stringify(phaseConfirmation(before.state))} (or they can tap "Close the vote" on the game panel).`,
+              );
             }
             // Only affirmative confirmation or an explicitly unsupported client may proceed.
           }
         }
 
         await runEvent(store, code, { type: 'ADVANCE', byPlayerId: id.playerId, expected: confirmed });
-        const result = await project(ctx, code, id.playerId);
-        // Lead with the freshest narration so the moderator can read it aloud.
-        const projection = result.structuredContent as unknown as Projection;
-        const latest = projection.narration.at(-1);
-        if (latest && (projection.phase === 'DAWN' || projection.phase === 'DUSK' || projection.phase === 'ENDED')) {
-          result.content = [{ type: 'text', text: `${latest.text}\n\n${(result.content[0] as { text: string }).text}` }];
-        }
-        return result;
+        // The freshest narration (for the moderator to read aloud) is part of
+        // every result's text digest.
+        return await project(ctx, code, id.playerId);
       } catch (err) {
         return errorResult(err);
       }

@@ -122,7 +122,11 @@ the room's shared anchor; put it on the projector.
 elicitation (enum of legal targets). Clients without elicitation (Claude
 custom connectors today) get a teaching error pointing at the app's tap
 path — two paths, one validated write. Closing a vote that would banish
-nobody (tie / no votes) asks the moderator accept/decline the same way.
+nobody (tie / no votes) asks the moderator accept/decline the same way —
+unless the call already carries the confirmation (`expected` with
+`voteOutcome: "none"`, which the app sends after its own confirm sheet). If
+the prompt goes unanswered the vote stays open and the reply says how to
+confirm.
 Answers that land on the wrong replica are relayed through the store —
 elicitation survives multi-instance round-robin (tested).
 
@@ -134,6 +138,11 @@ elicitation survives multi-instance round-robin (tested).
    night → dawn → discussion → vote → dusk → night...
 4. Night roles act via `submit_night_action`; day votes via `cast_vote`;
    `get_state` refreshes; every result says what to do next.
+
+Every result's text carries the caller's own role, the living and the fallen,
+the latest narration, the tally, and their private information, and the same
+facts are in `structuredContent` — hosts show their model only one of the
+two (see DECISIONS.md #54).
 
 ## Identity
 

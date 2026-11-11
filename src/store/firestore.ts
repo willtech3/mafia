@@ -10,7 +10,7 @@ import {
   type CoreDoc,
   type PlayerDoc,
 } from './docs.js';
-import { phaseKey, type MutateCtx, type MutateResult, type MutateScope, type RoomStore, type StoredRoom } from './types.js';
+import { FEATURED_LOBBY_FRESH_MS, phaseKey, type MutateCtx, type MutateResult, type MutateScope, type RoomStore, type StoredRoom } from './types.js';
 
 /**
  * Firestore (Native mode) store.
@@ -153,14 +153,20 @@ export class FirestoreRoomStore implements RoomStore {
     });
   }
 
-  async findFeaturedLobbies(): Promise<string[]> {
+  async findFeaturedLobbies(nowMs: number = Date.now()): Promise<string[]> {
+    // Freshness is filtered here rather than in the query (a range filter on
+    // top of the two equalities would need a composite index). The limit is
+    // generous so a pile of stale lobbies can't crowd out the live one.
     const snaps = await this.db
       .collection('rooms')
       .where('featured', '==', true)
       .where('phase', '==', 'LOBBY')
-      .limit(10)
+      .limit(100)
       .get();
-    return snaps.docs.map((d) => d.id).sort();
+    return snaps.docs
+      .filter((d) => nowMs - d.updateTime.toMillis() <= FEATURED_LOBBY_FRESH_MS)
+      .map((d) => d.id)
+      .sort();
   }
 
   async putOrphanResponse(id: string, payload: unknown): Promise<void> {

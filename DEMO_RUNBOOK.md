@@ -118,4 +118,5 @@ loses people fast enough to feel dangerous.
 | Projector board frozen | It reconnects automatically; hard-refresh the browser tab if not |
 | Room polluted / wrong state | `reset_room` (same crowd, fresh deal) or create a fresh room |
 
-Deleted/stale rooms clean themselves up (48 h TTL).
+Deleted/stale rooms clean themselves up (48 h TTL); a lobby nobody has touched
+for 3 h stops answering code-less joins (it is still joinable by code).
