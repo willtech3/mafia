@@ -378,6 +378,53 @@ Updated through Milestone 1 (2026-08-09).
     Cloud Run instances do not bill 24/7. Cold starts are acceptable until the
     next live drill; bump min back to 2 for a show.
 
+## Host-channel review (2026-11-11)
+
+54. **Each half of a tool result must stand alone.** Hosts show their model
+    only one half: claude.ai passes the `content` text and hides
+    `structuredContent`; Claude Code / the Agent SDK do the reverse (verified
+    against the live connector: `how_to_play` came back as bare JSON, the
+    text dropped). The text used to be a header plus `next_step_hint`, so on
+    claude.ai the model never learned its player's role, who was alive, the
+    narration (except right after its own advance), the tally, or a
+    detective's result — it could only point at the panel. The text now
+    carries a digest built from the projection (`src/server/digest.ts`; post-
+    `viewFor`, so it cannot widen redaction), and the structured half carries
+    the lead sentence as `message`.
+
+55. **A dropped seat key is called out.** `get_state`/`how_to_play` without a
+    usable `player_token` still return the public view, but now say so and
+    why (missing / invalid / other room / seat removed) and tell the model not
+    to re-join. Previously the role-less board read as "you are not in this
+    game", and the natural fix — `join_room` again — creates a duplicate
+    seat that is a spectator mid-game (#44).
+
+56. **A no-banish vote close can always be completed.** Supersedes the
+    unconditional elicitation in #36. Two changes: (a) a call that carries
+    `expected` with `voteOutcome: "none"` has already confirmed that nobody
+    is banished (the app's confirm sheet does this), so the server no longer
+    elicits a second time; (b) when an elicitation gets no answer, the reply
+    explains why the vote stayed open and spells out the confirming re-call.
+    Before, a host that drops `elicitation/create` took 12 s to answer "The
+    vote stays open." on every attempt, app taps included — a tied or empty
+    vote could never be closed. The reducer's atomic outcome check is
+    unchanged, so a vote landing in between still yields CONFLICT.
+
+57. **Featured lobbies age out of blind join after 3 h** without a moderator
+    write (create / kick / reset). Rooms live 48 h (#23); an abandoned test or
+    dry-run lobby used to capture every code-less `join_room` (or turn it into
+    "several games are open") for that whole time. Aged-out lobbies remain
+    joinable by code. The runbook's zero-featured-lobbies check still applies
+    on show day — this only bounds the damage.
+
+58. **Seen, deliberately not changed:** `GET /mcp` answers 200 with an SSE
+    stream that never carries anything (stateless server, no notifications);
+    a 405 would be tidier and would not hold a Cloud Run request open, but no
+    client misbehaves on it. And `_meta.ui.domain` is hashed from
+    `MAFIA_PUBLIC_URL`, which Terraform does not set, so it is only right for
+    the staging URL baked in as the default — set the variable if the service
+    is ever reached under another URL.
+
 ## Testing notes
 
 25. Fuzz: 10,000 random full games across n = 5, 6, 7, 12, 40, 80 — all

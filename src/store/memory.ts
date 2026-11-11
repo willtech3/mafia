@@ -9,7 +9,7 @@ import {
   type CoreDoc,
   type PlayerDoc,
 } from './docs.js';
-import type { MutateCtx, MutateResult, MutateScope, RoomStore, StoredRoom } from './types.js';
+import { FEATURED_LOBBY_FRESH_MS, type MutateCtx, type MutateResult, type MutateScope, type RoomStore, type StoredRoom } from './types.js';
 
 /**
  * In-memory store for unit tests and local play. Mirrors the Firestore
@@ -22,6 +22,8 @@ interface MemoryRoom {
   players: Map<string, PlayerDoc>;
   actions: Map<string, ActionDoc>;
   version: number;
+  /** Wall-clock time of the last core-doc write (Firestore: the core doc's updateTime). */
+  coreWrittenAtMs: number;
 }
 
 export class MemoryRoomStore implements RoomStore {
@@ -49,6 +51,7 @@ export class MemoryRoomStore implements RoomStore {
       players,
       actions: new Map(),
       version: this.nextVersion(),
+      coreWrittenAtMs: Date.now(),
     });
   }
 
@@ -120,6 +123,7 @@ export class MemoryRoomStore implements RoomStore {
       case 'core': {
         if (scope.kind !== 'full') throw new Error('core writes require a full scope');
         room.core = structuredClone(coreFromState(next));
+        room.coreWrittenAtMs = Date.now();
         // Player-doc diffs: deletions (lobby kick) and field changes (reset).
         for (const id of [...room.players.keys()]) {
           if (!next.players[id]) room.players.delete(id);
@@ -138,9 +142,10 @@ export class MemoryRoomStore implements RoomStore {
     return next;
   }
 
-  async findFeaturedLobbies(): Promise<string[]> {
+  async findFeaturedLobbies(nowMs: number = Date.now()): Promise<string[]> {
     return [...this.rooms.values()]
       .filter((r) => r.core.featured && r.core.phase === 'LOBBY')
+      .filter((r) => nowMs - r.coreWrittenAtMs <= FEATURED_LOBBY_FRESH_MS)
       .map((r) => r.core.code)
       .sort();
   }

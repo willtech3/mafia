@@ -71,8 +71,16 @@ export interface RoomStore {
    */
   mutate(code: string, scope: MutateScope, fn: (state: RoomState, ctx: MutateCtx) => MutateResult): Promise<RoomState>;
 
-  /** Room codes of featured rooms currently in LOBBY (for blind join_room). */
-  findFeaturedLobbies(): Promise<string[]>;
+  /**
+   * Room codes of featured rooms currently in LOBBY (for blind join_room),
+   * limited to FRESH lobbies: ones whose core doc (create / kick / reset —
+   * i.e. the moderator doing something) was written within
+   * FEATURED_LOBBY_FRESH_MS of `nowMs`. Rooms live for 48h, and an abandoned
+   * lobby from an earlier test or dry run would otherwise keep capturing
+   * blind joins (or turn them into "several games are open") for two days.
+   * A lobby that ages out is still joinable by its code.
+   */
+  findFeaturedLobbies(nowMs?: number): Promise<string[]>;
 
   /**
    * Cross-replica relay for elicitation responses. In the 2025-11-25 era the
@@ -83,6 +91,9 @@ export interface RoomStore {
   putOrphanResponse(id: string, payload: unknown): Promise<void>;
   takeOrphanResponse(id: string): Promise<unknown | null>;
 }
+
+/** How long after the moderator's last write a featured lobby stays discoverable without a code. */
+export const FEATURED_LOBBY_FRESH_MS = 3 * 60 * 60 * 1000;
 
 /** Actions and votes are tagged so stale docs from earlier phases are inert. */
 export function phaseKey(state: Pick<RoomState, 'generation' | 'round' | 'phase'>): string | null {

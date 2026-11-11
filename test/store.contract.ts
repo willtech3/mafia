@@ -3,7 +3,7 @@ import { GameError } from '../src/game/errors.js';
 import { initialRoom } from '../src/game/reducer.js';
 import type { RoomState } from '../src/game/types.js';
 import { runEvent } from '../src/store/engine.js';
-import type { RoomStore } from '../src/store/types.js';
+import { FEATURED_LOBBY_FRESH_MS, type RoomStore } from '../src/store/types.js';
 
 /**
  * Contract suite run against every RoomStore implementation (memory always,
@@ -175,6 +175,17 @@ export function storeContract(makeStore: () => Promise<RoomStore>): void {
     const lobbies = await store.findFeaturedLobbies();
     expect(lobbies).toContain(a);
     expect(lobbies).not.toContain(b);
+  });
+
+  it('findFeaturedLobbies ignores lobbies nobody has touched for hours', async () => {
+    // An abandoned test/dry-run lobby must not capture blind joins for the
+    // whole 48h room lifetime (it stays joinable by code).
+    const store = await makeStore();
+    const code = await freshRoom(store, 5);
+    const now = Date.now();
+    expect(await store.findFeaturedLobbies(now + FEATURED_LOBBY_FRESH_MS - 60_000)).toContain(code);
+    expect(await store.findFeaturedLobbies(now + FEATURED_LOBBY_FRESH_MS + 60_000)).not.toContain(code);
+    expect((await store.load(code))?.state.phase).toBe('LOBBY');
   });
 
   it('reset makes stale action docs invisible (generation bump)', async () => {
